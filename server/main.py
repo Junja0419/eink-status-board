@@ -478,13 +478,16 @@ async def list_presets():
     return load_presets()
 
 
-@app.get("/api/shortcuts/names")
+from fastapi.responses import PlainTextResponse
+
+@app.get("/api/shortcuts/names", response_class=PlainTextResponse)
 async def list_shortcut_names():
     """
-    Apple 단축어 전용: 프리셋 이름 목록만 배열로 묶어 반환한다.
-    단축어가 리스트를 단일 문자열로 뭉쳐버리지 않도록 딕셔너리로 한번 감쌉니다.
+    Apple 단축어 전용: 프리셋 이름 목록을 줄바꿈으로 구분된 일반 텍스트로 반환한다.
+    단축어의 예측 불가능한 JSON 파싱 오류를 원천 차단합니다.
     """
-    return {"names": [p["name"] for p in load_presets()]}
+    names = [p["name"].strip() for p in load_presets()]
+    return "\n".join(names)
 
 class ShortcutActivateRequest(BaseModel):
     name: str

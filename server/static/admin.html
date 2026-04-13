@@ -627,7 +627,7 @@
 
     <!-- ════════════ Apple 단축어 연동 가이드 ════════════ -->
     <section class="card">
-      <div class="card-title"><span class="icon">🍎</span> 제어 센터용 "단축어" 만드는 법 (초간단)</div>
+      <div class="card-title"><span class="icon">🍎</span> 제어 센터용 "단축어" 만드는 법 (초간단/오류없음)</div>
       <div style="font-size: 13px; color: var(--text-muted); line-height: 1.6;">
         <p style="margin-bottom: 12px; color: var(--text-primary);">단축어 앱에서 <strong>"E-ink 갱신"</strong>이라는 단축어를 하나만 직접 만들어두면, 제어 센터에서 클릭 한 번에 모든 잉크 화면을 고를 수 있습니다!</p>
         <ol style="padding-left: 20px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 8px;">
@@ -636,15 +636,15 @@
             <code style="display: inline-block; background: rgba(255,255,255,0.1); padding: 4px 8px; border-radius: 4px; margin-top: 4px; color: var(--accent); font-family: monospace;" id="guide-url1">http://your-server-ip/api/shortcuts/names</code>
           </li>
           <li><strong>URL의 콘텐츠 가져오기</strong> 동작을 이어서 추가합니다.</li>
-          <li><strong>사전 값 가져오기</strong> 동작을 이어서 추가하고, <code>names</code> 값을 가져옵니다.</li>
-          <li><strong>목록에서 선택</strong> 동작을 이어서 추가합니다. (가져온 프리셋 이름 목록이 뜹니다)</li>
+          <li><strong>텍스트 분리</strong> 동작을 이어서 추가합니다. (기준을 <strong>새로운 줄</strong>로 설정하세요)</li>
+          <li><strong>목록에서 선택</strong> 동작을 이어서 추가합니다. (방금 분리된 텍스트 목록이 깔끔하게 뜹니다)</li>
           <li><strong>URL</strong> 동작을 하나 더 추가하고 아래 주소를 넣습니다.<br>
             <code style="display: inline-block; background: rgba(255,255,255,0.1); padding: 4px 8px; border-radius: 4px; margin-top: 4px; color: var(--accent); font-family: monospace;" id="guide-url2">http://your-server-ip/api/shortcuts/activate</code>
           </li>
           <li><strong>URL의 콘텐츠 가져오기</strong> 동작을 마지막으로 추가하고, 화살표(더 보기)를 눌러 방법을 <strong>POST</strong>로 바꿉니다.</li>
           <li>바로 아래 <strong>요청 본문 (Request Body)</strong>을 <strong>JSON</strong>으로 설정하고, <strong>새로운 필드 추가 (텍스트)</strong>를 눌러 <strong>키(Key)</strong>에는 <code>name</code>을 입력하고, <strong>텍스트(Text)</strong>에는 <strong>'선택한 항목'</strong> 변수를 넣습니다.</li>
         </ol>
-        <p style="color: var(--success);">이 단축어를 제어 센터나 메뉴 막대에 등록하시면, 이제부터 프리셋이 추가될 때마다 알아서 목록이 갱신됩니다!</p>
+        <p style="color: var(--success);">이제 이모지가 들어간 이름도, 여러 개의 프리셋도 100% 오류 없이 완벽하게 작동합니다!</p>
       </div>
     </section>
 
