@@ -627,19 +627,18 @@
 
     <!-- ════════════ Apple 단축어 연동 가이드 ════════════ -->
     <section class="card">
-      <div class="card-title"><span class="icon">🍎</span> 제어 센터용 "단축어" 만드는 법 (최초 1회)</div>
+      <div class="card-title"><span class="icon">🍎</span> 제어 센터용 "단축어" 만드는 법 (초간단)</div>
       <div style="font-size: 13px; color: var(--text-muted); line-height: 1.6;">
         <p style="margin-bottom: 12px; color: var(--text-primary);">단축어 앱에서 <strong>"E-ink 갱신"</strong>이라는 단축어를 하나만 직접 만들어두면, 제어 센터에서 클릭 한 번에 모든 잉크 화면을 고를 수 있습니다!</p>
         <ol style="padding-left: 20px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 8px;">
           <li>단축어 앱을 열고 새 단축어를 만듭니다.</li>
           <li><strong>URL</strong> 동작을 추가하고 아래 주소를 넣습니다.<br>
-            <code style="display: inline-block; background: rgba(255,255,255,0.1); padding: 4px 8px; border-radius: 4px; margin-top: 4px; color: var(--accent); font-family: monospace;" id="guide-url1">http://your-server-ip/api/presets</code>
+            <code style="display: inline-block; background: rgba(255,255,255,0.1); padding: 4px 8px; border-radius: 4px; margin-top: 4px; color: var(--accent); font-family: monospace;" id="guide-url1">http://your-server-ip/api/shortcuts/list</code>
           </li>
           <li><strong>URL의 콘텐츠 가져오기</strong> 동작을 이어서 추가합니다.</li>
-          <li><strong>목록에서 선택</strong> 동작을 이어서 추가합니다. (프롬프트는 '프리셋 선택' 등으로 적습니다)</li>
-          <li><strong>사전 값 가져오기</strong> 동작을 추가하고, '선택한 항목'에서 <code>id</code> 값을 가져옵니다.</li>
-          <li><strong>URL</strong> 동작을 하나 더 추가하고 아래 주소를 넣습니다. (가운데에 방금 구한 '사전 값' 변수를 넣습니다)<br>
-            <code style="display: inline-block; background: rgba(255,255,255,0.1); padding: 4px 8px; border-radius: 4px; margin-top: 4px; color: var(--accent); font-family: monospace;" id="guide-url2">http://your-server-ip/api/presets/(사전 값)/activate</code>
+          <li><strong>목록에서 선택</strong> 동작을 이어서 추가합니다. (이제 '프리셋 이름'만 예쁘게 나옵니다)</li>
+          <li><strong>URL</strong> 동작을 하나 더 추가하고 아래 주소를 넣습니다. (가운데에 <strong>'선택한 항목'</strong> 변수를 바로 넣으세요)<br>
+            <code style="display: inline-block; background: rgba(255,255,255,0.1); padding: 4px 8px; border-radius: 4px; margin-top: 4px; color: var(--accent); font-family: monospace;" id="guide-url2">http://your-server-ip/api/presets/(선택한 항목)/activate</code>
           </li>
           <li><strong>URL의 콘텐츠 가져오기</strong> 동작을 마지막으로 추가하고, 화살표(더 보기)를 눌러 방법을 <strong>POST</strong>로 바꿉니다.</li>
         </ol>
@@ -1017,8 +1016,8 @@
       const base = serverUrl.replace(/\/$/, '');
       const el1 = document.getElementById('guide-url1');
       const el2 = document.getElementById('guide-url2');
-      if(el1) el1.textContent = `${base}/api/presets`;
-      if(el2) el2.textContent = `${base}/api/presets/(사전 값)/activate`;
+      if(el1) el1.textContent = `${base}/api/shortcuts/list`;
+      if(el2) el2.textContent = `${base}/api/presets/(선택한 항목)/activate`;
     }
 
     /** 서버 URL 저장 */

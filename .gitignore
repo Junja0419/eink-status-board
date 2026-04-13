@@ -42,6 +42,7 @@ eink-status-board.ino
 server/data/shortcuts.json
 server/data/images/*
 !server/data/images/.gitkeep
+GEMINI.md
 
 # macOS
 .DS_Store

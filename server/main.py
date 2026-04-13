@@ -478,6 +478,17 @@ async def list_presets():
     return load_presets()
 
 
+@app.get("/api/shortcuts/list")
+async def list_presets_for_shortcuts():
+    """
+    Apple 단축어 전용: { "프리셋 이름": "ID" } 형태의 딕셔너리를 반환한다.
+    단축어의 '목록에서 선택' 동작에서 바로 이름을 보여주고 ID를 결과로 받기 위함입니다.
+    """
+    presets = load_presets()
+    # 이름이 중복될 경우 뒤에 붙은 것이 덮어쓰므로, 가급적 이름을 다르게 지어야 함
+    return {p["name"]: p["id"] for p in presets}
+
+
 @app.post("/api/presets")
 async def create_preset(
     name: str = Form(..., description="상태 프리셋 이름"),
