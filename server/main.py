@@ -495,11 +495,17 @@ async def activate_shortcut_by_name(req: ShortcutActivateRequest):
     Apple 단축어 전용: 이름으로 프리셋을 찾아 활성화한다.
     URL 인코딩 문제를 피하기 위해 JSON Body를 사용합니다.
     """
-    name = req.name
+    name = req.name.strip() if req.name else ""
+    logger.info(f"📱 단축어로부터 활성화 요청 수신: 이름='{name}'")
+    
     presets = load_presets()
-    preset = next((p for p in presets if p["name"] == name), None)
+    preset = next((p for p in presets if p["name"].strip() == name), None)
+    
     if not preset:
-        raise HTTPException(404, f"'{name}' 프리셋을 찾을 수 없습니다.")
+        available_names = [p["name"] for p in presets]
+        logger.error(f"❌ 단축어 요청 실패: '{name}'에 해당하는 프리셋이 없습니다. (현재 등록된 이름들: {available_names})")
+        raise HTTPException(status_code=400, detail=f"'{name}' 프리셋을 찾을 수 없습니다.")
+        
     return await activate_preset(preset["id"])
 
 
