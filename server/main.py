@@ -486,11 +486,16 @@ async def list_shortcut_names():
     """
     return [p["name"] for p in load_presets()]
 
+class ShortcutActivateRequest(BaseModel):
+    name: str
+
 @app.post("/api/shortcuts/activate")
-async def activate_shortcut_by_name(name: str):
+async def activate_shortcut_by_name(req: ShortcutActivateRequest):
     """
     Apple 단축어 전용: 이름으로 프리셋을 찾아 활성화한다.
+    URL 인코딩 문제를 피하기 위해 JSON Body를 사용합니다.
     """
+    name = req.name
     presets = load_presets()
     preset = next((p for p in presets if p["name"] == name), None)
     if not preset:
