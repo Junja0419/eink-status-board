@@ -1,0 +1,331 @@
+/*
+ * ============================================================
+ *  eink-status-board.ino
+ *  ESP32-S3 기반 CrowPanel 3.7인치 E-paper 디스플레이
+ *  WebSocket 실시간 데이터 수신 펌웨어
+ * ============================================================
+ *
+ *  - 서버(ws://SERVER_IP:5000/ws)로부터 240x416 해상도의
+ *    바이트 배열(12,480 바이트)을 바이너리로 수신합니다.
+ *  - 수신된 데이터를 메모리 버퍼에 저장한 뒤,
+ *    updateDisplay()를 호출하여 화면을 갱신합니다.
+ *  - 연결이 끊어지면 자동으로 재연결을 시도합니다.
+ *
+ *  라이브러리 의존성:
+ *    - WiFi.h          (ESP32 내장)
+ *    - WebSocketsClient.h (by Markus Sattler)
+ *    - EPD.h / EPD_GUI.h (Elecrow EPaperDrive 라이브러리)
+ * ============================================================
+ */
+
+#include <WiFi.h>
+#include <WebSocketsClient.h>
+#include "src/EPD.h"
+#include "src/EPD_GUI.h"
+
+// ──────────────────────────────────────────────
+//  사용자 설정 영역 (Wi-Fi / WebSocket 서버)
+// ──────────────────────────────────────────────
+
+// Wi-Fi 접속 정보
+const char* WIFI_SSID     = "YOUR_WIFI_SSID";      // 사용할 Wi-Fi SSID
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";   // 사용할 Wi-Fi 비밀번호
+
+// WebSocket 서버 정보
+const char* WS_HOST = "SERVER_IP";   // WebSocket 서버 IP 또는 도메인
+const uint16_t WS_PORT = 5000;       // WebSocket 서버 포트
+const char* WS_PATH = "/ws";         // WebSocket 엔드포인트 경로
+
+// ──────────────────────────────────────────────
+//  디스플레이 관련 상수
+// ──────────────────────────────────────────────
+
+const uint16_t DISPLAY_WIDTH  = 240;    // 디스플레이 가로 해상도 (= EPD_W)
+const uint16_t DISPLAY_HEIGHT = 416;    // 디스플레이 세로 해상도 (= EPD_H)
+const size_t   FRAME_BUFFER_SIZE = 12480; // 240 × 416 ÷ 8 = 12,480 바이트 (1-bit BW)
+
+// ──────────────────────────────────────────────
+//  전역 변수
+// ──────────────────────────────────────────────
+
+WebSocketsClient webSocket;              // WebSocket 클라이언트 인스턴스
+
+uint8_t frameBuffer[FRAME_BUFFER_SIZE];  // 서버로부터 수신한 프레임 데이터를 저장할 버퍼
+bool newFrameAvailable = false;          // 새로운 프레임 데이터 수신 완료 플래그
+
+unsigned long lastReconnectAttempt = 0;  // 마지막 재연결 시도 시각 (millis)
+const unsigned long RECONNECT_INTERVAL = 5000; // 재연결 시도 간격 (5초)
+
+// ──────────────────────────────────────────────
+//  함수 전방 선언
+// ──────────────────────────────────────────────
+
+void connectToWiFi();
+void initWebSocket();
+void webSocketEvent(WStype_t type, uint8_t* payload, size_t length);
+void updateDisplay(uint8_t* buffer, size_t length);
+
+// ============================================================
+//  setup() — 초기화
+// ============================================================
+
+void setup() {
+  // 시리얼 모니터 초기화 (디버그 출력용, 115200 baud)
+  Serial.begin(115200);
+  delay(100);
+
+  Serial.println();
+  Serial.println("========================================");
+  Serial.println("  E-ink Status Board — 부팅 시작");
+  Serial.println("========================================");
+
+  // 프레임 버퍼를 0으로 초기화
+  memset(frameBuffer, 0, FRAME_BUFFER_SIZE);
+
+  // ── E-paper 디스플레이 초기화 ──
+  // GPIO 7: CrowPanel 3.7" 디스플레이 전원 핀 (HIGH = 전원 ON)
+  pinMode(7, OUTPUT);
+  digitalWrite(7, HIGH);
+  Serial.println("[디스플레이] 전원 ON (GPIO 7 HIGH)");
+
+  // EPD SPI 및 GPIO 초기화
+  EPD_GPIOInit();
+
+  // 프레임 버퍼를 EPD 라이브러리에 등록
+  // 파라미터: 버퍼, 너비, 높이, 회전(0=세로), 배경색
+  Paint_NewImage(frameBuffer, EPD_W, EPD_H, 0, WHITE);
+  Paint_Clear(WHITE);
+
+  // 초기 화면 클리어 (흰색 화면으로 시작)
+  EPD_FastInit();
+  EPD_Display_Clear();
+  EPD_Update();
+  EPD_DeepSleep();
+  Serial.println("[디스플레이] 초기화 완료 (화면 클리어됨)");
+
+  // 1단계: Wi-Fi 연결
+  connectToWiFi();
+
+  // 2단계: WebSocket 초기화 및 서버 연결
+  initWebSocket();
+
+  Serial.println("[시스템] 초기화 완료. 루프 진입...");
+}
+
+// ============================================================
+//  loop() — 메인 루프
+// ============================================================
+
+void loop() {
+  // ── WebSocket 이벤트 루프 ──
+  // 반드시 매 루프마다 호출하여 연결 유지 및 수신 이벤트를 처리한다.
+  // ⚠️ 주의: loop() 안에서 긴 delay()를 사용하면
+  //          WebSocket 연결이 타임아웃되거나 데이터 수신이 지연된다.
+  webSocket.loop();
+
+  // ── 새 프레임이 수신되었으면 디스플레이 갱신 ──
+  if (newFrameAvailable) {
+    Serial.println("[디스플레이] 새 프레임 수신 → 화면 갱신 시작");
+    updateDisplay(frameBuffer, FRAME_BUFFER_SIZE);
+    newFrameAvailable = false;  // 플래그 초기화
+    Serial.println("[디스플레이] 화면 갱신 완료");
+  }
+
+  // 짧은 yield — CPU 부하 방지 (1ms)
+  delay(1);
+}
+
+// ============================================================
+//  Wi-Fi 연결 함수
+// ============================================================
+
+void connectToWiFi() {
+  Serial.printf("[Wi-Fi] SSID '%s'에 연결 시도 중...\n", WIFI_SSID);
+
+  WiFi.mode(WIFI_STA);            // Station 모드 설정
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  // 연결 대기 (최대 약 20초)
+  int retryCount = 0;
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+    retryCount++;
+
+    if (retryCount > 40) {  // 40 × 500ms = 20초
+      Serial.println();
+      Serial.println("[Wi-Fi] ❌ 연결 실패! SSID/비밀번호를 확인하세요.");
+      Serial.println("[Wi-Fi] 10초 후 재부팅합니다...");
+      delay(10000);
+      ESP.restart();  // ESP32 소프트웨어 리셋
+    }
+  }
+
+  Serial.println();
+  Serial.println("[Wi-Fi] ✅ 연결 성공!");
+  Serial.printf("[Wi-Fi] IP 주소: %s\n", WiFi.localIP().toString().c_str());
+  Serial.printf("[Wi-Fi] RSSI: %d dBm\n", WiFi.RSSI());
+}
+
+// ============================================================
+//  WebSocket 초기화 함수
+// ============================================================
+
+void initWebSocket() {
+  Serial.printf("[WebSocket] 서버 %s:%d%s 에 연결 시도...\n", WS_HOST, WS_PORT, WS_PATH);
+
+  // WebSocket 서버에 연결 설정
+  // begin(호스트, 포트, 경로)
+  webSocket.begin(WS_HOST, WS_PORT, WS_PATH);
+
+  // 이벤트 핸들러 등록 — 모든 WebSocket 이벤트가 이 함수로 전달됨
+  webSocket.onEvent(webSocketEvent);
+
+  // 연결이 끊어졌을 때 자동 재연결 설정
+  // 재연결 간격: 5000ms (5초), 타임아웃 없음(0)
+  webSocket.setReconnectInterval(RECONNECT_INTERVAL);
+
+  // 하트비트(ping) 설정 — 연결 유지 확인용
+  // 15초마다 ping 전송, 3초 내 pong 응답 없으면 연결 끊김으로 판단, 최대 2회 실패 허용
+  webSocket.enableHeartbeat(15000, 3000, 2);
+
+  Serial.println("[WebSocket] 초기화 완료. 연결 대기 중...");
+}
+
+// ============================================================
+//  WebSocket 이벤트 핸들러
+//  ────────────────────────────────────────────
+//  모든 WebSocket 이벤트(연결, 끊김, 데이터 수신 등)를
+//  이 콜백 함수에서 처리한다.
+// ============================================================
+
+void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+
+    // ── 연결 끊김 이벤트 ──
+    // WebSocket 연결이 끊어졌을 때 호출된다.
+    // setReconnectInterval()에 의해 자동 재연결이 시도되므로
+    // 여기서는 로그만 출력한다.
+    case WStype_DISCONNECTED:
+      Serial.println("[WebSocket] ⚠️  연결 끊김 (DISCONNECTED)");
+      Serial.println("[WebSocket] 자동 재연결을 시도합니다...");
+      break;
+
+    // ── 연결 성공 이벤트 ──
+    // 서버와 WebSocket 핸드셰이크가 완료되었을 때 호출된다.
+    // payload에는 연결된 서버의 URL 정보가 담겨 있다.
+    case WStype_CONNECTED:
+      Serial.printf("[WebSocket] ✅ 연결 성공! 서버 URL: %s\n", payload);
+      Serial.println("[WebSocket] 바이너리 데이터 수신 대기 중...");
+      break;
+
+    // ── 텍스트 메시지 수신 이벤트 ──
+    // 서버가 텍스트(문자열) 데이터를 보냈을 때 호출된다.
+    // 이 프로젝트에서는 주로 바이너리를 사용하지만,
+    // 디버그용 메시지 등을 처리할 수 있다.
+    case WStype_TEXT:
+      Serial.printf("[WebSocket] 📨 텍스트 수신 (%d 바이트): %s\n", length, payload);
+      break;
+
+    // ── 바이너리 데이터 수신 이벤트 (핵심 기능) ──
+    // 서버가 보낸 240×416 해상도의 바이트 배열을 수신한다.
+    // 예상 크기: 12,480 바이트 (= 240 × 416 ÷ 8)
+    //
+    // 수신 흐름:
+    //   1. 데이터 크기 검증
+    //   2. frameBuffer에 복사
+    //   3. newFrameAvailable 플래그를 true로 설정
+    //   4. loop()에서 플래그를 확인하고 updateDisplay() 호출
+    case WStype_BIN:
+      Serial.printf("[WebSocket] 📦 바이너리 수신: %d 바이트\n", length);
+
+      // 수신 데이터 크기 검증
+      if (length == FRAME_BUFFER_SIZE) {
+        // 정상 크기 — 프레임 버퍼에 복사
+        memcpy(frameBuffer, payload, length);
+        newFrameAvailable = true;
+        Serial.println("[WebSocket] ✅ 프레임 데이터 버퍼에 저장 완료");
+      } else if (length > FRAME_BUFFER_SIZE) {
+        // 예상보다 큰 데이터 — 잘라서 저장 (오버플로우 방지)
+        Serial.printf("[WebSocket] ⚠️  수신 크기(%d)가 버퍼(%d)보다 큼! 잘라서 저장합니다.\n",
+                      length, FRAME_BUFFER_SIZE);
+        memcpy(frameBuffer, payload, FRAME_BUFFER_SIZE);
+        newFrameAvailable = true;
+      } else {
+        // 예상보다 작은 데이터 — 경고 후 그대로 저장
+        Serial.printf("[WebSocket] ⚠️  수신 크기(%d)가 예상(%d)보다 작음! 부분 데이터로 처리합니다.\n",
+                      length, FRAME_BUFFER_SIZE);
+        memset(frameBuffer, 0, FRAME_BUFFER_SIZE);  // 버퍼 초기화
+        memcpy(frameBuffer, payload, length);         // 수신된 만큼만 복사
+        newFrameAvailable = true;
+      }
+      break;
+
+    // ── Ping 수신 이벤트 ──
+    // 서버가 ping을 보냈을 때 호출된다.
+    // 라이브러리가 자동으로 pong을 응답하므로 별도 처리 불필요.
+    case WStype_PING:
+      Serial.println("[WebSocket] 🏓 Ping 수신");
+      break;
+
+    // ── Pong 수신 이벤트 ──
+    // 서버가 우리의 ping에 대해 pong으로 응답했을 때 호출된다.
+    case WStype_PONG:
+      Serial.println("[WebSocket] 🏓 Pong 수신 — 연결 정상");
+      break;
+
+    // ── 에러 이벤트 ──
+    // WebSocket 통신 중 에러가 발생했을 때 호출된다.
+    case WStype_ERROR:
+      Serial.printf("[WebSocket] ❌ 에러 발생! 길이: %d\n", length);
+      break;
+
+    // ── 기타 이벤트 ──
+    default:
+      Serial.printf("[WebSocket] 알 수 없는 이벤트 (type=%d)\n", type);
+      break;
+  }
+}
+
+// ============================================================
+//  디스플레이 갱신 함수
+//  ────────────────────────────────────────────
+//  서버로부터 수신한 12,480바이트 raw 바이너리를
+//  CrowPanel 3.7" E-paper (UC8253) 디스플레이에 출력한다.
+//
+//  @param buffer  프레임 데이터가 담긴 바이트 배열 포인터
+//  @param length  바이트 배열의 길이 (정상: 12,480 바이트)
+//
+//  흐름:
+//    1. EPD_FastInit()  — 디스플레이를 DeepSleep에서 깨움
+//    2. EPD_Display()   — raw 바이너리 데이터를 SPI로 전송
+//    3. EPD_Update()    — 전자잉크 화면 갱신 (눈에 보이는 변경)
+//    4. EPD_DeepSleep() — 저전력 모드 진입
+// ============================================================
+
+void updateDisplay(uint8_t* buffer, size_t length) {
+  Serial.println("[디스플레이] updateDisplay() 호출됨");
+  Serial.printf("[디스플레이] 버퍼 크기: %d 바이트\n", length);
+
+  // 디버그: 첫 16바이트 출력
+  Serial.printf("[디스플레이] 첫 16바이트: ");
+  for (int i = 0; i < 16 && i < (int)length; i++) {
+    Serial.printf("%02X ", buffer[i]);
+  }
+  Serial.println();
+
+  // 1. 디스플레이를 DeepSleep에서 깨움
+  EPD_FastInit();
+
+  // 2. 수신된 raw 바이너리를 디스플레이에 전송
+  //    서버(Pillow)에서 생성한 1-bit 이미지가 그대로 전달됨
+  EPD_Display(buffer);
+
+  // 3. 화면 갱신 (전자잉크 새로고침)
+  EPD_Update();
+
+  // 4. 저전력 모드 진입 (디스플레이 내용은 유지됨)
+  EPD_DeepSleep();
+
+  Serial.println("[디스플레이] 화면 갱신 완료, DeepSleep 진입");
+}

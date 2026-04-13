@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>E-ink Status Board — Admin</title>
+  <meta name="description" content="ESP32 전자잉크 디스플레이 관리자 패널">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ── 디자인 토큰 ── */
+    :root {
+      --bg-base: #07070e;
+      --bg-surface: rgba(255, 255, 255, 0.03);
+      --bg-surface-hover: rgba(255, 255, 255, 0.06);
+      --bg-input: rgba(255, 255, 255, 0.05);
+      --border: rgba(255, 255, 255, 0.08);
+      --border-focus: rgba(124, 58, 237, 0.5);
+      --text-primary: #e2e8f0;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent: #7c3aed;
+      --accent-hover: #6d28d9;
+      --accent-glow: rgba(124, 58, 237, 0.25);
+      --gradient: linear-gradient(135deg, #7c3aed, #4f46e5);
+      --success: #10b981;
+      --success-bg: rgba(16, 185, 129, 0.12);
+      --danger: #ef4444;
+      --danger-bg: rgba(239, 68, 68, 0.12);
+      --warning: #f59e0b;
+      --radius: 16px;
+      --radius-sm: 10px;
+      --radius-xs: 6px;
+      --shadow: 0 4px 32px rgba(0, 0, 0, 0.4);
+      --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* ── 리셋 & 기본 ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-base);
+      color: var(--text-primary);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── 배경 그라디언트 오브 ── */
+    body::before {
+      content: '';
+      position: fixed;
+      top: -30%;
+      right: -10%;
+      width: 600px;
+      height: 600px;
+      background: radial-gradient(circle, rgba(124, 58, 237, 0.08), transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    body::after {
+      content: '';
+      position: fixed;
+      bottom: -20%;
+      left: -10%;
+      width: 500px;
+      height: 500px;
+      background: radial-gradient(circle, rgba(79, 70, 229, 0.06), transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── 레이아웃 ── */
+    .container {
+      position: relative;
+      z-index: 1;
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 24px 20px 60px;
+    }
+
+    /* ── 헤더 ── */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 32px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .header-left h1 {
+      font-size: 22px;
+      font-weight: 700;
+      background: var(--gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .header-left p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      transition: background var(--transition);
+    }
+    .status-dot.connected {
+      background: var(--success);
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+    }
+
+    /* ── 카드 ── */
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 20px;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      transition: border-color var(--transition);
+    }
+    .card:hover {
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card-title .icon {
+      font-size: 18px;
+    }
+
+    /* ── E-ink 미리보기 프레임 ── */
+    .preview-frame {
+      position: relative;
+      background: #1a1a2e;
+      border-radius: 12px;
+      padding: 12px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      box-shadow: inset 0 2px 8px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.2);
+    }
+    .preview-screen {
+      width: 100%;
+      max-width: 416px;
+      aspect-ratio: 416 / 240;
+      background: #fff;
+      border-radius: 4px;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.1);
+    }
+    .preview-screen img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      image-rendering: pixelated;
+    }
+    .preview-label {
+      text-align: center;
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* ── 인풋 & 폼 ── */
+    .input-group {
+      display: flex;
+      gap: 10px;
+    }
+    input[type="text"], textarea {
+      flex: 1;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 16px;
+      font-size: 14px;
+      font-family: inherit;
+      color: var(--text-primary);
+      outline: none;
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+    input[type="text"]:focus, textarea:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    input[type="text"]::placeholder, textarea::placeholder {
+      color: var(--text-muted);
+    }
+
+    /* ── 버튼 ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px 20px;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-size: 14px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all var(--transition);
+      white-space: nowrap;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .btn-primary {
+      background: var(--gradient);
+      color: #fff;
+      box-shadow: 0 2px 12px var(--accent-glow);
+    }
+    .btn-primary:hover:not(:disabled) {
+      box-shadow: 0 4px 20px rgba(124, 58, 237, 0.4);
+    }
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover:not(:disabled) {
+      background: var(--bg-surface-hover);
+      color: var(--text-primary);
+    }
+    .btn-danger {
+      background: var(--danger-bg);
+      color: var(--danger);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+    .btn-danger:hover:not(:disabled) {
+      background: rgba(239, 68, 68, 0.2);
+    }
+    .btn-success {
+      background: var(--success-bg);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.2);
+    }
+    .btn-success:hover:not(:disabled) {
+      background: rgba(16, 185, 129, 0.2);
+    }
+    .btn-sm {
+      padding: 7px 12px;
+      font-size: 12px;
+      border-radius: var(--radius-xs);
+    }
+    .btn-icon {
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border-radius: var(--radius-xs);
+      font-size: 16px;
+    }
+
+    /* ── 세그먼트 컨트롤 ── */
+    .segment-control {
+      display: flex;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 3px;
+      margin-bottom: 16px;
+    }
+    .segment-btn {
+      flex: 1;
+      padding: 8px 16px;
+      border: none;
+      border-radius: 7px;
+      font-size: 13px;
+      font-weight: 500;
+      font-family: inherit;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+    .segment-btn.active {
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 2px 8px var(--accent-glow);
+    }
+
+    /* ── 드롭존 ── */
+    .dropzone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius-sm);
+      padding: 32px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all var(--transition);
+      position: relative;
+      overflow: hidden;
+    }
+    .dropzone:hover, .dropzone.drag-over {
+      border-color: var(--accent);
+      background: rgba(124, 58, 237, 0.05);
+    }
+    .dropzone.drag-over {
+      box-shadow: inset 0 0 20px var(--accent-glow);
+    }
+    .dropzone-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+    .dropzone-text {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+    .dropzone-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .dropzone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .dropzone-preview {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    .dropzone-preview img {
+      max-width: 200px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .dropzone-preview .filename {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .dropzone.has-file .dropzone-default { display: none; }
+    .dropzone.has-file .dropzone-preview { display: flex; }
+
+    /* ── 폼 필드 ── */
+    .form-field {
+      margin-bottom: 14px;
+    }
+    .form-field label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* ── 상태 프리셋 그리드 ── */
+    .presets-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+      gap: 14px;
+    }
+    .preset-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: all var(--transition);
+      animation: fadeInUp 0.3s ease backwards;
+    }
+    .preset-card:hover {
+      border-color: rgba(255,255,255,0.15);
+      transform: translateY(-2px);
+      box-shadow: var(--shadow);
+    }
+    .preset-preview {
+      width: 100%;
+      aspect-ratio: 416 / 240;
+      background: #fff;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+      border-bottom: 1px solid var(--border);
+    }
+    .preset-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      image-rendering: pixelated;
+    }
+    .preset-info {
+      padding: 14px;
+    }
+    .preset-name {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .preset-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .type-badge {
+      font-size: 11px;
+      font-weight: 500;
+      padding: 2px 8px;
+      border-radius: 999px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .type-badge.text {
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+    }
+    .type-badge.image {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+    }
+    .preset-actions {
+      display: flex;
+      gap: 6px;
+    }
+    .preset-actions .btn { flex: 1; }
+
+    /* ── 빈 상태 ── */
+    .empty-state {
+      text-align: center;
+      padding: 48px 24px;
+      color: var(--text-muted);
+    }
+    .empty-state .icon { font-size: 48px; margin-bottom: 12px; opacity: 0.4; }
+    .empty-state p { font-size: 14px; }
+
+    /* ── 토스트 알림 ── */
+    .toast-container {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .toast {
+      padding: 12px 20px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-weight: 500;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      box-shadow: var(--shadow);
+      animation: slideIn 0.3s ease;
+      max-width: 360px;
+    }
+    .toast.success {
+      background: rgba(16, 185, 129, 0.9);
+      color: #fff;
+    }
+    .toast.error {
+      background: rgba(239, 68, 68, 0.9);
+      color: #fff;
+    }
+    .toast.info {
+      background: rgba(124, 58, 237, 0.9);
+      color: #fff;
+    }
+    .toast.fade-out {
+      animation: slideOut 0.3s ease forwards;
+    }
+
+    /* ── 설정 ── */
+    .settings-toggle {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--text-muted);
+      cursor: pointer;
+      margin-bottom: 12px;
+      transition: color var(--transition);
+    }
+    .settings-toggle:hover { color: var(--text-secondary); }
+    .settings-content {
+      display: none;
+    }
+    .settings-content.open {
+      display: block;
+    }
+
+    /* ── 로딩 스피너 ── */
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+
+    /* ── 애니메이션 ── */
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(60px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes slideOut {
+      from { opacity: 1; transform: translateX(0); }
+      to   { opacity: 0; transform: translateX(60px); }
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* ── 반응형 ── */
+    @media (max-width: 640px) {
+      .container { padding: 16px 14px 40px; }
+      .header { flex-direction: column; align-items: flex-start; gap: 12px; }
+      .presets-grid { grid-template-columns: 1fr; }
+      .input-group { flex-direction: column; }
+      .input-group .btn { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- ════════════ 헤더 ════════════ -->
+    <header class="header">
+      <div class="header-left">
+        <h1>E-ink Status Board</h1>
+        <p>ESP32 전자잉크 디스플레이 관리자</p>
+      </div>
+      <div class="status-badge" id="connection-badge">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="connection-text">연결 확인 중...</span>
+      </div>
+    </header>
+
+    <!-- ════════════ 현재 디스플레이 미리보기 ════════════ -->
+    <section class="card" id="preview-card">
+      <div class="card-title"><span class="icon">🖥️</span> 현재 디스플레이</div>
+      <div class="preview-frame">
+        <div class="preview-screen">
+          <img id="current-preview" src="/current-preview.png" alt="현재 E-ink 화면">
+        </div>
+      </div>
+      <div class="preview-label" id="current-status-label">표시 중인 내용 없음</div>
+    </section>
+
+    <!-- ════════════ 새 상태 프리셋 등록 ════════════ -->
+    <section class="card">
+      <div class="card-title"><span class="icon">➕</span> 새 상태 프리셋 등록</div>
+
+            <form id="create-preset-form">
+        <!-- 이름 -->
+        <div class="form-field">
+          <label for="preset-name">상태 프리셋 이름</label>
+          <input type="text" id="preset-name" placeholder="예: 회의 중, 자리 비움" required>
+        </div>
+
+        <!-- 이미지 업로드 -->
+        <div class="form-field" id="image-field">
+          <label>이미지 파일 (필수)</label>
+          <div class="dropzone" id="dropzone">
+            <div class="dropzone-default">
+              <div class="dropzone-icon">📁</div>
+              <div class="dropzone-text">이미지를 드래그하거나 클릭하여 선택</div>
+              <div class="dropzone-hint">권장: 416×240px · PNG, JPG</div>
+            </div>
+            <div class="dropzone-preview">
+              <img id="dropzone-thumb" src="" alt="미리보기">
+              <span class="filename" id="dropzone-filename"></span>
+            </div>
+            <input type="file" id="preset-image" accept="image/*" required>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 4px;" id="create-btn">
+          상태 프리셋 등록
+        </button>
+      </form>
+    </section>
+
+    <!-- ════════════ 등록된 상태 프리셋 목록 ════════════ -->
+    <section class="card">
+      <div class="card-title"><span class="icon">📌</span> 등록된 상태 프리셋</div>
+      <div id="presets-container">
+        <div class="empty-state" id="presets-empty">
+          <div class="icon">📭</div>
+          <p>아직 등록된 상태 프리셋가 없습니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ════════════ 설정 ════════════ -->
+    <section class="card">
+      <div class="settings-toggle" onclick="toggleSettings()">
+        <span>⚙️</span> 서버 설정 <span id="settings-arrow">▸</span>
+      </div>
+      <div class="settings-content" id="settings-content">
+        <div class="form-field">
+          <label for="server-url">서버 외부 URL (Apple 단축어 내보내기용)</label>
+          <div class="input-group">
+            <input type="text" id="server-url" placeholder="http://your-server-ip:5000">
+            <button type="button" class="btn btn-ghost" onclick="saveServerUrl()">저장</button>
+          </div>
+        </div>
+        <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+          Apple 단축어가 이 URL로 요청을 보냅니다. 외부에서 접근 가능한 IP 또는 도메인을 입력하세요.
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- 토스트 컨테이너 -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script>
+    // ══════════════════════════════════════════
+    //  상태 관리
+    // ══════════════════════════════════════════
+
+    
+    let selectedImageFile = null;
+    let serverUrl = localStorage.getItem('eink_server_url') || window.location.origin;
+
+    // ══════════════════════════════════════════
+    //  초기화
+    // ══════════════════════════════════════════
+
+    document.addEventListener('DOMContentLoaded', () => {
+      // 서버 URL 필드 초기화
+      document.getElementById('server-url').value = serverUrl;
+
+      // 데이터 로드
+      fetchStatus();
+      fetchPresets();
+
+      // 5초마다 상태 폴링 (연결 수 등)
+      setInterval(fetchStatus, 5000);
+
+      // 이벤트 리스너
+      
+      document.getElementById('create-preset-form').addEventListener('submit', handleCreatePreset);
+      setupDropzone();
+    });
+
+    // ══════════════════════════════════════════
+    //  API 호출 함수
+    // ══════════════════════════════════════════
+
+    /** 현재 서버 상태를 조회한다 */
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/status');
+        const data = await res.json();
+
+        // 연결 상태 표시
+        const dot = document.getElementById('status-dot');
+        const text = document.getElementById('connection-text');
+        if (data.connected_clients > 0) {
+          dot.classList.add('connected');
+          text.textContent = `${data.connected_clients}개 디바이스 연결`;
+        } else {
+          dot.classList.remove('connected');
+          text.textContent = '연결된 디바이스 없음';
+        }
+
+        // 현재 표시 텍스트
+        const label = document.getElementById('current-status-label');
+        label.textContent = data.text ? `"${data.text}"` : '표시 중인 내용 없음';
+      } catch (e) {
+        console.error('상태 조회 실패:', e);
+      }
+    }
+
+    /** 빠른 텍스트 전송 */
+    async function sendText(text) {
+      const res = await fetch('/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      return res.json();
+    }
+
+    /** 상태 프리셋 목록 조회 */
+    async function fetchPresets() {
+      try {
+        const res = await fetch('/api/presets');
+        const presets = await res.json();
+        renderPresets(presets);
+      } catch (e) {
+        console.error('상태 프리셋 목록 조회 실패:', e);
+      }
+    }
+
+    /** 상태 프리셋 생성 */
+    async function createPreset(formData) {
+      const res = await fetch('/api/presets', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || '상태 프리셋 생성 실패');
+      }
+      return res.json();
+    }
+
+    /** 상태 프리셋 삭제 */
+    async function deletePreset(id) {
+      const res = await fetch(`/api/presets/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('삭제 실패');
+      return res.json();
+    }
+
+    /** 상태 프리셋 활성화 (디스플레이 푸시) */
+    async function activatePreset(id) {
+      const res = await fetch(`/api/presets/${id}/activate`, { method: 'POST' });
+      if (!res.ok) throw new Error('활성화 실패');
+      return res.json();
+    }
+
+    // ══════════════════════════════════════════
+    //  이벤트 핸들러
+    // ══════════════════════════════════════════
+
+    /** 빠른 전송 폼 제출 */
+    async function handleQuickSend(e) {
+      e.preventDefault();
+      const input = document.getElementById('quick-text');
+      const btn = document.getElementById('quick-send-btn');
+      const text = input.value.trim();
+      if (!text) return;
+
+      btn.disabled = true;
+      btn.innerHTML = '<div class="spinner"></div>';
+
+      try {
+        const result = await sendText(text);
+        showToast(`✅ "${text}" 전송 완료 (${result.clients_notified}개 디바이스)`, 'success');
+        input.value = '';
+        refreshPreview();
+        fetchStatus();
+      } catch (e) {
+        showToast(`❌ 전송 실패: ${e.message}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '전송';
+      }
+    }
+
+    /** 상태 프리셋 생성 폼 제출 */
+    async function handleCreatePreset(e) {
+      e.preventDefault();
+      const btn = document.getElementById('create-btn');
+      const nameEl = document.getElementById('preset-name');
+      const name = nameEl.value.trim();
+      if (!name) { showToast('상태 프리셋 이름을 입력하세요.', 'error'); return; }
+
+      if (!selectedImageFile) { showToast('이미지를 선택하세요.', 'error'); return; }
+
+      const formData = new FormData();
+      formData.append('name', name);
+      formData.append('image', selectedImageFile);
+
+      btn.disabled = true;
+      btn.innerHTML = '<div class="spinner"></div> 등록 중...';
+
+      try {
+        await createPreset(formData);
+        showToast(`📌 "${name}" 상태 프리셋가 등록되었습니다.`, 'success');
+        // 폼 리셋
+        nameEl.value = '';
+        document.getElementById('preset-text').value = '';
+        resetDropzone();
+        selectedImageFile = null;
+        fetchPresets();
+      } catch (err) {
+        showToast(`❌ ${err.message}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '상태 프리셋 등록';
+      }
+    }
+
+
+
+    // ══════════════════════════════════════════
+    //  상태 프리셋 렌더링
+    // ══════════════════════════════════════════
+
+    /** 상태 프리셋 목록을 카드 그리드로 렌더링한다 */
+    function renderPresets(presets) {
+      const container = document.getElementById('presets-container');
+      const empty = document.getElementById('presets-empty');
+
+      if (presets.length === 0) {
+        container.innerHTML = '';
+        container.appendChild(empty);
+        empty.style.display = '';
+        return;
+      }
+
+      const t = Date.now(); // 캐시 방지
+      container.innerHTML = `<div class="presets-grid">${
+        presets.map((s, i) => `
+          <div class="preset-card" style="animation-delay: ${i * 0.05}s">
+            <div class="preset-preview">
+              <img src="/api/presets/${s.id}/preview.png?t=${t}" alt="${s.name}" loading="lazy">
+            </div>
+            <div class="preset-info">
+              <div class="preset-name">${escapeHtml(s.name)}</div>
+              <div class="preset-meta">
+                <span class="type-badge ${s.type}">${s.type === 'text' ? '텍스트' : '이미지'}</span>
+              </div>
+              <div class="preset-actions">
+                <button class="btn btn-success btn-sm" onclick="handleActivate('${s.id}', '${escapeHtml(s.name)}')" title="디스플레이에 적용">
+                  ▶ 적용
+                </button>
+                <button class="btn btn-ghost btn-sm" onclick="handleExport('${s.id}')" title="Apple 단축어 다운로드">
+                  🍎 상태 프리셋
+                </button>
+                <button class="btn btn-danger btn-sm btn-icon" onclick="handleDelete('${s.id}', '${escapeHtml(s.name)}')" title="삭제">
+                  🗑
+                </button>
+              </div>
+            </div>
+          </div>
+        `).join('')
+      }</div>`;
+    }
+
+    /** 상태 프리셋 활성화 버튼 핸들러 */
+    async function handleActivate(id, name) {
+      try {
+        const result = await activatePreset(id);
+        showToast(`✅ "${name}" 적용 완료 (${result.clients_notified}개 디바이스)`, 'success');
+        refreshPreview();
+        fetchStatus();
+      } catch (e) {
+        showToast(`❌ 적용 실패: ${e.message}`, 'error');
+      }
+    }
+
+    /** Apple 단축어 내보내기 핸들러 */
+    function handleExport(id) {
+      const url = serverUrl;
+      if (!url || url === window.location.origin) {
+        const inputUrl = prompt(
+          'Apple 단축어에서 사용할 서버 외부 URL을 입력하세요.\n예: http://34.xx.xx.xx:5000',
+          serverUrl
+        );
+        if (!inputUrl) return;
+        serverUrl = inputUrl;
+        localStorage.setItem('eink_server_url', serverUrl);
+        document.getElementById('server-url').value = serverUrl;
+      }
+      window.open(`/api/presets/${id}/export-preset?server_url=${encodeURIComponent(serverUrl)}`);
+    }
+
+    /** 상태 프리셋 삭제 핸들러 */
+    async function handleDelete(id, name) {
+      if (!confirm(`"${name}" 상태 프리셋를 삭제하시겠습니까?`)) return;
+      try {
+        await deletePreset(id);
+        showToast(`🗑️ "${name}" 상태 프리셋가 삭제되었습니다.`, 'info');
+        fetchPresets();
+      } catch (e) {
+        showToast(`❌ 삭제 실패: ${e.message}`, 'error');
+      }
+    }
+
+    // ══════════════════════════════════════════
+    //  드롭존 (이미지 업로드)
+    // ══════════════════════════════════════════
+
+    function setupDropzone() {
+      const dropzone = document.getElementById('dropzone');
+      const fileInput = document.getElementById('preset-image');
+
+      // 드래그 이벤트
+      dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('drag-over');
+      });
+      dropzone.addEventListener('dragleave', () => {
+        dropzone.classList.remove('drag-over');
+      });
+      dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('drag-over');
+        if (e.dataTransfer.files.length > 0) {
+          fileInput.files = e.dataTransfer.files;
+          handleFileSelect(e.dataTransfer.files[0]);
+        }
+      });
+
+      // 파일 선택
+      fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+          handleFileSelect(e.target.files[0]);
+        }
+      });
+    }
+
+    /** 파일 선택 시 미리보기 표시 */
+    function handleFileSelect(file) {
+      if (!file.type.startsWith('image/')) {
+        showToast('이미지 파일만 업로드할 수 있습니다.', 'error');
+        return;
+      }
+
+      selectedImageFile = file;
+      const dropzone = document.getElementById('dropzone');
+      const thumb = document.getElementById('dropzone-thumb');
+      const fname = document.getElementById('dropzone-filename');
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        thumb.src = e.target.result;
+        fname.textContent = file.name;
+        dropzone.classList.add('has-file');
+      };
+      reader.readAsDataURL(file);
+    }
+
+    /** 드롭존 리셋 */
+    function resetDropzone() {
+      const dropzone = document.getElementById('dropzone');
+      dropzone.classList.remove('has-file');
+      document.getElementById('preset-image').value = '';
+      document.getElementById('dropzone-thumb').src = '';
+      document.getElementById('dropzone-filename').textContent = '';
+    }
+
+    // ══════════════════════════════════════════
+    //  유틸리티
+    // ══════════════════════════════════════════
+
+    /** 미리보기 이미지 새로고침 */
+    function refreshPreview() {
+      const img = document.getElementById('current-preview');
+      img.src = `/current-preview.png?t=${Date.now()}`;
+    }
+
+    /** 토스트 알림 표시 */
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      toast.textContent = message;
+      container.appendChild(toast);
+
+      setTimeout(() => {
+        toast.classList.add('fade-out');
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+
+    /** HTML 특수문자 이스케이프 */
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    /** 설정 토글 */
+    function toggleSettings() {
+      const content = document.getElementById('settings-content');
+      const arrow = document.getElementById('settings-arrow');
+      content.classList.toggle('open');
+      arrow.textContent = content.classList.contains('open') ? '▾' : '▸';
+    }
+
+    /** 서버 URL 저장 */
+    function saveServerUrl() {
+      const url = document.getElementById('server-url').value.trim();
+      if (!url) { showToast('URL을 입력하세요.', 'error'); return; }
+      serverUrl = url;
+      localStorage.setItem('eink_server_url', url);
+      showToast('✅ 서버 URL이 저장되었습니다.', 'success');
+    }
+  </script>
+</body>
+</html>
