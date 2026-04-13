@@ -88,8 +88,8 @@ const uint16_t WS_PORT    = 5000;
 서버에 접속한 후 가장 먼저 실행해야 할 명령어들입니다.
 
 ```bash
-# 시스템 업데이트 및 필수 패키지(cron) 설치
-sudo apt update && sudo apt install cron -y
+# 시스템 업데이트 및 필수 패키지(cron, git, curl 등) 설치
+sudo apt update && sudo apt install cron git curl -y
 
 # cron 서비스 활성화
 sudo systemctl start cron
@@ -104,13 +104,14 @@ sudo systemctl enable cron
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source $HOME/.local/bin/env  # 또는 source ~/.bashrc
 
-# 2. 프로젝트 폴더 생성 및 이동
-mkdir ~/nameplate && cd ~/nameplate
+# 2. 프로젝트 소스코드 다운로드 (Git Clone)
+git clone https://github.com/[본인_깃허브_계정]/eink-status-board.git ~/nameplate
+cd ~/nameplate/server
 
 # 3. 가상환경 생성 및 라이브러리 설치
 uv venv
 source .venv/bin/activate
-uv pip install fastapi uvicorn websockets pillow python-multipart
+uv pip install -r requirements.txt
 ```
 
 ### 4. DuckDNS (DDNS) 자동 업데이트 설정
@@ -137,7 +138,7 @@ chmod 700 ~/duckdns/duck.sh
 ### 5. 서버 실행 가이드 (GCP 환경)
 
 ```bash
-cd ~/nameplate
+cd ~/nameplate/server
 source .venv/bin/activate
 
 # 백그라운드 실행을 원할 경우 nohup 사용
