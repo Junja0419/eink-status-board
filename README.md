@@ -210,12 +210,11 @@ bash upload.sh
 
 | Method | Endpoint | 설명 |
 |--------|----------|------|
-| `GET` | `/api/shortcuts` | 등록된 단축어 목록 조회 |
-| `POST` | `/api/shortcuts` | 새 단축어 생성 (텍스트/이미지) |
-| `DELETE` | `/api/shortcuts/{id}` | 단축어 삭제 |
-| `POST` | `/api/shortcuts/{id}/activate` | 단축어 활성화 (디스플레이 푸시) |
-| `GET` | `/api/shortcuts/{id}/preview.png` | 단축어 미리보기 이미지 (PNG) |
-| `GET` | `/api/shortcuts/{id}/export-shortcut` | Apple 단축어 파일 다운로드 |
+| `GET` | `/api/presets` | 등록된 프리셋 목록 조회 |
+| `POST` | `/api/presets` | 새 프리셋 생성 (이미지) |
+| `DELETE` | `/api/presets/{id}` | 프리셋 삭제 |
+| `POST` | `/api/presets/{id}/activate` | 프리셋 활성화 (디스플레이 푸시) |
+| `GET` | `/api/presets/{id}/preview.png` | 프리셋 미리보기 이미지 (PNG) |
 
 ### 사용 예시
 
@@ -225,43 +224,25 @@ curl -X POST http://localhost:5000/status \
   -H "Content-Type: application/json" \
   -d '{"text": "미팅 중 🧑‍💻"}'
 
-# 텍스트 단축어 생성
-curl -X POST http://localhost:5000/api/shortcuts \
-  -F "name=미팅 중" \
-  -F "type=text" \
-  -F "text=미팅 중 🧑‍💻"
-
-# 이미지 단축어 생성
-curl -X POST http://localhost:5000/api/shortcuts \
-  -F "name=회의실 안내" \
-  -F "type=image" \
-  -F "image=@screen.png"
-
-# 단축어 활성화
-curl -X POST http://localhost:5000/api/shortcuts/{id}/activate
-
-# Apple 단축어 내보내기
-curl -O http://localhost:5000/api/shortcuts/{id}/export-shortcut?server_url=http://your-server:5000
+# 프리셋 활성화
+curl -X POST http://localhost:5000/api/presets/{id}/activate
 ```
 
-## 🍎 Apple 단축어 연동
+## 🍎 Apple 단축어 연동 (마스터 단축어 방식)
 
-관리자 페이지에서 등록한 각 단축어를 **Apple Shortcuts 파일(.shortcut)**로 내보낼 수 있습니다.
+다운로드 방식의 단축어 설치는 최신 iOS/macOS 보안 정책상 불가능합니다.
+대신, 서버 API와 연동되는 **마스터 단축어 딱 1개**만 기기(단축어 앱)에 생성해 두면 평생 사용할 수 있습니다.
 
-### 사용 방법
+### 설정 방법 (1분 소요)
+1. 단축어 앱에서 새 단축어를 만듭니다. (이름: "E-ink 갱신" 등)
+2. **URL** 동작을 추가하고 서버 주소(`http://서버IP:5000/api/presets`)를 넣습니다.
+3. **URL의 콘텐츠 가져오기** 동작을 추가합니다.
+4. **목록에서 선택** 동작을 추가합니다.
+5. **사전 값 가져오기** 동작을 추가해 선택한 항목에서 `id`를 가져옵니다.
+6. **URL** 동작을 추가하고, 주소를 `http://서버IP:5000/api/presets/[사전 값]/activate` 형태로 만듭니다.
+7. **URL의 콘텐츠 가져오기** 동작을 마지막으로 추가하고, **POST** 방식으로 변경합니다.
 
-1. 관리자 페이지 하단 **서버 설정**에서 외부 접근 가능한 서버 URL을 입력합니다.
-2. 원하는 단축어 카드에서 **🍎 단축어** 버튼을 클릭합니다.
-3. 다운로드된 `.shortcut` 파일을 iPhone/iPad에서 열면 단축어 앱에 자동 추가됩니다.
-4. 홈 화면, 위젯, 또는 Siri로 **원탭 실행**할 수 있습니다.
-
-### 내보내진 단축어 동작
-
-```
-1. 서버의 /api/shortcuts/{id}/activate 로 POST 요청
-2. E-ink 디스플레이에 해당 단축어 화면이 표시됨
-3. "✅ '{이름}' 화면으로 전환되었습니다." 알림 표시
-```
+이제 이 단축어를 제어 센터나 메뉴 막대, 위젯 등에 등록해두면 잉크 디스플레이 화면을 한 번 클릭으로 간편하게 바꿀 수 있습니다! 프리셋이 추가될 때마다 단축어 목록도 알아서 갱신됩니다.
 
 ## 🔄 동작 흐름
 
@@ -275,14 +256,10 @@ sequenceDiagram
     ESP->>Server: WS /ws 연결
     Server-->>ESP: 기존 프레임 전송 (있는 경우)
 
-    User->>Admin: 단축어 "미팅 중" 등록
-    Admin->>Server: POST /api/shortcuts
+    User->>Admin: 상태 프리셋 "미팅 중" 등록
+    Admin->>Server: POST /api/presets
 
-    User->>Admin: 🍎 단축어 내보내기
-    Admin->>Server: GET /export-shortcut
-    Server-->>User: .shortcut 파일 다운로드
-
-    User->>Server: Apple 단축어로 활성화
+    User->>Server: Apple 단축어로 활성화 (GET 리스트 후 POST 선택)
     Server->>Server: 텍스트/이미지 → 1-bit 렌더링
     Server-->>ESP: WebSocket 바이너리 전송
     ESP->>ESP: E-ink 디스플레이 갱신

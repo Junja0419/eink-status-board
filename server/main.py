@@ -29,7 +29,7 @@
 import asyncio
 import json
 import logging
-import plistlib
+
 import uuid as uuid_lib
 from datetime import datetime, timezone
 from io import BytesIO
@@ -276,12 +276,10 @@ def image_to_1bit_bytes(img: Image.Image) -> bytes:
     @param img  변환할 PIL Image 객체
     @return     12,480 바이트의 bytes 객체
     """
-    # 1단계: 그레이스케일('L' 모드)로 변환
-    grayscale = img.convert("L")
-
-    # 2단계: 임계값 기반 이진화 (128 기준)
-    # 128 이상 → 흰색(255), 128 미만 → 검은색(0)
-    binary = grayscale.point(lambda pixel: 255 if pixel >= 128 else 0, mode="1")
+    # 1단계 & 2단계: 1-bit 변환 (Floyd-Steinberg 디더링 기본 적용)
+    # 컬러 이미지나 이모지 등을 업로드했을 때, 단순 임계값(Threshold)으로 자르면
+    # 디테일이 날아가지만, 디더링을 적용하면 명암을 점의 밀도로 표현하여 원본의 형태를 보존합니다.
+    binary = img.convert("1")
 
     # 3단계: 하드웨어 해상도(240x416 세로)에 맞게 회전 및 좌우 반전
     # E-paper 컨트롤러 메모리 스캔 방향(하드웨어적 특성)에 맞추기 위해
@@ -344,74 +342,12 @@ def render_preview_png(img: Image.Image) -> bytes:
     @param img  변환할 PIL Image 객체
     @return     PNG 형식의 bytes 객체
     """
-    gray = img.convert("L")
-    bw = gray.point(lambda p: 255 if p >= 128 else 0)
+    # E-ink와 동일하게 디더링된 1-bit 흑백 이미지로 변환하여 미리보기를 제공한다.
+    bw = img.convert("1")
     buf = BytesIO()
     bw.save(buf, format="PNG")
     return buf.getvalue()
 
-
-# ──────────────────────────────────────────────
-#  Apple 단축어 (.preset) 파일 생성
-# ──────────────────────────────────────────────
-
-def generate_apple_preset(name: str, activate_url: str) -> bytes:
-    """
-    Apple Presets 앱에서 열 수 있는 .preset 파일을 생성한다.
-    해당 상태 프리셋는 activate_url로 POST 요청을 보내고,
-    완료 알림을 표시한다.
-
-    @param name          상태 프리셋 이름 (Apple Presets에 표시될 이름)
-    @param activate_url  활성화 API의 전체 URL
-    @return              바이너리 plist 형식의 bytes 객체
-    """
-    preset_data = {
-        "WFWorkflowMinimumClientVersionString": "900",
-        "WFWorkflowMinimumClientVersion": 900,
-        "WFWorkflowIcon": {
-            # 보라색 테마 (E-ink Status Board 브랜딩)
-            "WFWorkflowIconStartColor": 4251333119,
-            # 디스플레이 아이콘 글리프
-            "WFWorkflowIconGlyphNumber": 59648,
-        },
-        "WFWorkflowClientVersion": "2302.0.4",
-        "WFWorkflowHasOutputFallback": False,
-        "WFWorkflowActions": [
-            # ── 액션 1: URL 생성 ──
-            # activate 엔드포인트의 전체 URL을 정의한다.
-            {
-                "WFWorkflowActionIdentifier": "is.workflow.actions.url",
-                "WFWorkflowActionParameters": {
-                    "WFURLActionURL": activate_url,
-                },
-            },
-            # ── 액션 2: HTTP POST 요청 ──
-            # 위에서 생성한 URL로 POST 요청을 보낸다.
-            # 이 요청이 서버의 activate 엔드포인트를 호출하여
-            # E-ink 디스플레이를 갱신한다.
-            {
-                "WFWorkflowActionIdentifier": "is.workflow.actions.downloadurl",
-                "WFWorkflowActionParameters": {
-                    "WFHTTPMethod": "POST",
-                },
-            },
-            # ── 액션 3: 결과 알림 표시 ──
-            # 상태 프리셋 실행 완료를 사용자에게 알린다.
-            {
-                "WFWorkflowActionIdentifier": "is.workflow.actions.notification",
-                "WFWorkflowActionParameters": {
-                    "WFNotificationActionBody": f"✅ '{name}' 화면으로 전환되었습니다.",
-                    "WFNotificationActionTitle": "E-ink Status Board",
-                },
-            },
-        ],
-        "WFWorkflowInputContentItemClasses": [
-            "WFStringContentItem",
-        ],
-        "WFWorkflowOutputContentItemClasses": [],
-        "WFWorkflowHasPresetInputVariables": False,
-    }
-    return plistlib.dumps(preset_data, fmt=plistlib.FMT_BINARY)
 
 
 # ──────────────────────────────────────────────
@@ -669,56 +605,6 @@ async def preset_preview(preset_id: str):
     return Response(content=png_bytes, media_type="image/png")
 
 
-@app.get("/api/presets/{preset_id}/export-preset")
-async def export_apple_preset(preset_id: str, server_url: str = ""):
-    """
-    Apple Presets 앱에서 열 수 있는 .preset 파일을 생성하여 다운로드한다.
-
-    쿼리 파라미터:
-      server_url — 서버의 외부 접근 URL (예: http://34.xx.xx.xx:5000)
-                   Apple 단축어가 이 URL로 요청을 보내게 됨.
-
-    생성되는 상태 프리셋 동작:
-      1. activate 엔드포인트로 POST 요청
-      2. 완료 알림 표시
-    """
-    preset = get_preset(preset_id)
-    if not preset:
-        raise HTTPException(404, "상태 프리셋를 찾을 수 없습니다.")
-
-    if not server_url:
-        raise HTTPException(
-            400,
-            "server_url 파라미터가 필요합니다. "
-            "예: ?server_url=http://your-server:5000"
-        )
-
-    # activate 엔드포인트 전체 URL 구성
-    activate_url = f"{server_url.rstrip('/')}/api/presets/{preset_id}/activate"
-
-    # .preset 파일 생성 (바이너리 plist)
-    preset_bytes = generate_apple_preset(preset["name"], activate_url)
-
-    # 파일명 생성 — RFC 5987 인코딩으로 한글 파일명 지원
-    # ASCII 폴백 파일명 + UTF-8 인코딩 파일명을 모두 제공
-    from urllib.parse import quote
-    safe_name = preset["name"].replace(" ", "_")
-    filename_utf8 = f"eink_{safe_name}.shortcut"
-    filename_ascii = f"eink_{preset_id}.shortcut"
-    encoded_filename = quote(filename_utf8)
-
-    logger.info(f"🍎 Apple 단축어 내보내기: '{preset['name']}' → {filename_utf8}")
-
-    return Response(
-        content=preset_bytes,
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": (
-                f"attachment; filename=\"{filename_ascii}\"; "
-                f"filename*=UTF-8''{encoded_filename}"
-            )
-        },
-    )
 
 
 # ──────────────────────────────────────────────

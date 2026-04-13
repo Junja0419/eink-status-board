@@ -625,6 +625,28 @@
       </div>
     </section>
 
+    <!-- ════════════ Apple 단축어 연동 가이드 ════════════ -->
+    <section class="card">
+      <div class="card-title"><span class="icon">🍎</span> 제어 센터용 "단축어" 만드는 법 (최초 1회)</div>
+      <div style="font-size: 13px; color: var(--text-muted); line-height: 1.6;">
+        <p style="margin-bottom: 12px; color: var(--text-primary);">단축어 앱에서 <strong>"E-ink 갱신"</strong>이라는 단축어를 하나만 직접 만들어두면, 제어 센터에서 클릭 한 번에 모든 잉크 화면을 고를 수 있습니다!</p>
+        <ol style="padding-left: 20px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 8px;">
+          <li>단축어 앱을 열고 새 단축어를 만듭니다.</li>
+          <li><strong>URL</strong> 동작을 추가하고 아래 주소를 넣습니다.<br>
+            <code style="display: inline-block; background: rgba(255,255,255,0.1); padding: 4px 8px; border-radius: 4px; margin-top: 4px; color: var(--accent); font-family: monospace;" id="guide-url1">http://your-server-ip/api/presets</code>
+          </li>
+          <li><strong>URL의 콘텐츠 가져오기</strong> 동작을 이어서 추가합니다.</li>
+          <li><strong>목록에서 선택</strong> 동작을 이어서 추가합니다. (프롬프트는 '프리셋 선택' 등으로 적습니다)</li>
+          <li><strong>사전 값 가져오기</strong> 동작을 추가하고, '선택한 항목'에서 <code>id</code> 값을 가져옵니다.</li>
+          <li><strong>URL</strong> 동작을 하나 더 추가하고 아래 주소를 넣습니다. (가운데에 방금 구한 '사전 값' 변수를 넣습니다)<br>
+            <code style="display: inline-block; background: rgba(255,255,255,0.1); padding: 4px 8px; border-radius: 4px; margin-top: 4px; color: var(--accent); font-family: monospace;" id="guide-url2">http://your-server-ip/api/presets/(사전 값)/activate</code>
+          </li>
+          <li><strong>URL의 콘텐츠 가져오기</strong> 동작을 마지막으로 추가하고, 화살표(더 보기)를 눌러 방법을 <strong>POST</strong>로 바꿉니다.</li>
+        </ol>
+        <p style="color: var(--success);">이 단축어를 제어 센터나 메뉴 막대에 등록하시면, 이제부터 프리셋이 추가될 때마다 알아서 목록이 갱신됩니다!</p>
+      </div>
+    </section>
+
     <!-- ════════════ 설정 ════════════ -->
     <section class="card">
       <div class="settings-toggle" onclick="toggleSettings()">
@@ -663,8 +685,9 @@
     // ══════════════════════════════════════════
 
     document.addEventListener('DOMContentLoaded', () => {
-      // 서버 URL 필드 초기화
+      // 서버 URL 필드 초기화 및 가이드 업데이트
       document.getElementById('server-url').value = serverUrl;
+      updateGuideUrls();
 
       // 데이터 로드
       fetchStatus();
@@ -853,9 +876,6 @@
                 <button class="btn btn-success btn-sm" onclick="handleActivate('${s.id}', '${escapeHtml(s.name)}')" title="디스플레이에 적용">
                   ▶ 적용
                 </button>
-                <button class="btn btn-ghost btn-sm" onclick="handleExport('${s.id}')" title="Apple 단축어 다운로드">
-                  🍎 상태 프리셋
-                </button>
                 <button class="btn btn-danger btn-sm btn-icon" onclick="handleDelete('${s.id}', '${escapeHtml(s.name)}')" title="삭제">
                   🗑
                 </button>
@@ -876,22 +896,6 @@
       } catch (e) {
         showToast(`❌ 적용 실패: ${e.message}`, 'error');
       }
-    }
-
-    /** Apple 단축어 내보내기 핸들러 */
-    function handleExport(id) {
-      const url = serverUrl;
-      if (!url || url === window.location.origin) {
-        const inputUrl = prompt(
-          'Apple 단축어에서 사용할 서버 외부 URL을 입력하세요.\n예: http://34.xx.xx.xx:5000',
-          serverUrl
-        );
-        if (!inputUrl) return;
-        serverUrl = inputUrl;
-        localStorage.setItem('eink_server_url', serverUrl);
-        document.getElementById('server-url').value = serverUrl;
-      }
-      window.open(`/api/presets/${id}/export-preset?server_url=${encodeURIComponent(serverUrl)}`);
     }
 
     /** 상태 프리셋 삭제 핸들러 */
@@ -1008,12 +1012,22 @@
       arrow.textContent = content.classList.contains('open') ? '▾' : '▸';
     }
 
+    /** 가이드 URL 업데이트 */
+    function updateGuideUrls() {
+      const base = serverUrl.replace(/\/$/, '');
+      const el1 = document.getElementById('guide-url1');
+      const el2 = document.getElementById('guide-url2');
+      if(el1) el1.textContent = `${base}/api/presets`;
+      if(el2) el2.textContent = `${base}/api/presets/(사전 값)/activate`;
+    }
+
     /** 서버 URL 저장 */
     function saveServerUrl() {
       const url = document.getElementById('server-url').value.trim();
       if (!url) { showToast('URL을 입력하세요.', 'error'); return; }
       serverUrl = url;
       localStorage.setItem('eink_server_url', url);
+      updateGuideUrls();
       showToast('✅ 서버 URL이 저장되었습니다.', 'success');
     }
   </script>
