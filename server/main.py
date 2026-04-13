@@ -478,15 +478,24 @@ async def list_presets():
     return load_presets()
 
 
-@app.get("/api/shortcuts/list")
-async def list_presets_for_shortcuts():
+@app.get("/api/shortcuts/names")
+async def list_shortcut_names():
     """
-    Apple 단축어 전용: { "프리셋 이름": "ID" } 형태의 딕셔너리를 반환한다.
-    단축어의 '목록에서 선택' 동작에서 바로 이름을 보여주고 ID를 결과로 받기 위함입니다.
+    Apple 단축어 전용: 프리셋 이름 목록만 배열로 반환한다.
+    단축어의 '목록에서 선택' 동작에 JSON 배열을 넘기면 깔끔하게 이름만 표시됩니다.
+    """
+    return [p["name"] for p in load_presets()]
+
+@app.post("/api/shortcuts/activate")
+async def activate_shortcut_by_name(name: str):
+    """
+    Apple 단축어 전용: 이름으로 프리셋을 찾아 활성화한다.
     """
     presets = load_presets()
-    # 이름이 중복될 경우 뒤에 붙은 것이 덮어쓰므로, 가급적 이름을 다르게 지어야 함
-    return {p["name"]: p["id"] for p in presets}
+    preset = next((p for p in presets if p["name"] == name), None)
+    if not preset:
+        raise HTTPException(404, f"'{name}' 프리셋을 찾을 수 없습니다.")
+    return await activate_preset(preset["id"])
 
 
 @app.post("/api/presets")
