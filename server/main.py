@@ -481,10 +481,10 @@ async def list_presets():
 @app.get("/api/shortcuts/names")
 async def list_shortcut_names():
     """
-    Apple 단축어 전용: 프리셋 이름 목록만 배열로 반환한다.
-    단축어의 '목록에서 선택' 동작에 JSON 배열을 넘기면 깔끔하게 이름만 표시됩니다.
+    Apple 단축어 전용: 프리셋 이름 목록만 배열로 묶어 반환한다.
+    단축어가 리스트를 단일 문자열로 뭉쳐버리지 않도록 딕셔너리로 한번 감쌉니다.
     """
-    return [p["name"] for p in load_presets()]
+    return {"names": [p["name"] for p in load_presets()]}
 
 class ShortcutActivateRequest(BaseModel):
     name: str
