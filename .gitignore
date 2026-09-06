@@ -38,8 +38,8 @@ build/
 *.elf
 eink-status-board.ino
 
-# Project specific
-server/data/shortcuts.json
+# Project specific (runtime data — 프리셋/이미지는 서버마다 다름)
+server/data/presets.json
 server/data/images/*
 !server/data/images/.gitkeep
 GEMINI.md
@@ -60,3 +60,4 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+.omc/
