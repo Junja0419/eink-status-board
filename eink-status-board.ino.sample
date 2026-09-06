@@ -51,10 +51,7 @@ const size_t   FRAME_BUFFER_SIZE = 12480; // 240 × 416 ÷ 8 = 12,480 바이트 
 WebSocketsClient webSocket;              // WebSocket 클라이언트 인스턴스
 
 uint8_t frameBuffer[FRAME_BUFFER_SIZE];  // 서버로부터 수신한 프레임 데이터를 저장할 버퍼
-bool newFrameAvailable = false;          // 새로운 프레임 데이터 수신 완료 플래그
-
-unsigned long lastReconnectAttempt = 0;  // 마지막 재연결 시도 시각 (millis)
-const unsigned long RECONNECT_INTERVAL = 5000; // 재연결 시도 간격 (5초)
+volatile bool newFrameAvailable = false; // 새로운 프레임 데이터 수신 완료 플래그 (콜백과 loop() 양쪽에서 접근)
 
 // ──────────────────────────────────────────────
 //  함수 전방 선언
@@ -183,7 +180,7 @@ void initWebSocket() {
 
   // 연결이 끊어졌을 때 자동 재연결 설정
   // 재연결 간격: 5000ms (5초), 타임아웃 없음(0)
-  webSocket.setReconnectInterval(RECONNECT_INTERVAL);
+  webSocket.setReconnectInterval(5000);
 
   // 하트비트(ping) 설정 — 연결 유지 확인용
   // 15초마다 ping 전송, 3초 내 pong 응답 없으면 연결 끊김으로 판단, 최대 2회 실패 허용
@@ -252,12 +249,9 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         memcpy(frameBuffer, payload, FRAME_BUFFER_SIZE);
         newFrameAvailable = true;
       } else {
-        // 예상보다 작은 데이터 — 경고 후 그대로 저장
-        Serial.printf("[WebSocket] ⚠️  수신 크기(%d)가 예상(%d)보다 작음! 부분 데이터로 처리합니다.\n",
+        // 예상보다 작은 데이터 — 불완전 프레임이므로 무시
+        Serial.printf("[WebSocket] ⚠️  불완전 프레임 무시: %d / %d bytes\n",
                       length, FRAME_BUFFER_SIZE);
-        memset(frameBuffer, 0, FRAME_BUFFER_SIZE);  // 버퍼 초기화
-        memcpy(frameBuffer, payload, length);         // 수신된 만큼만 복사
-        newFrameAvailable = true;
       }
       break;
 
