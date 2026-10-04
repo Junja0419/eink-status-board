@@ -1,0 +1,9 @@
+#!/bin/sh
+# arduino-cli 내장 ctags(x86_64 전용) 대용품.
+#
+# arduino-cli 는 .ino 의 함수 프로토타입을 자동 생성하려고 ctags 를 호출한다.
+# Rosetta 가 없는 Apple Silicon Mac 에서는 내장 ctags 가 실행되지 않아 빌드가 실패하므로,
+# upload.sh 가 그 경우에만 이 스크립트를 대신 쓰게 한다. 태그를 하나도 내지 않으므로
+# 프로토타입은 자동 생성되지 않는다 — 스케치의 모든 함수는 사용 전에 선언돼 있어야 한다
+# (eink-status-board.ino 는 상단에 전방 선언을 모아 두었다).
+exit 0

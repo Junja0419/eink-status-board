@@ -5,11 +5,24 @@
  *  WebSocket 실시간 데이터 수신 펌웨어
  * ============================================================
  *
- *  - 서버(ws://SERVER_IP:5000/ws)로부터 240x416 해상도의
- *    바이트 배열(12,480 바이트)을 바이너리로 수신합니다.
+ *  - 서버(wss://도메인:443/ws, Caddy + Let's Encrypt)에 TLS로 접속해
+ *    240x416 해상도의 바이트 배열(12,480 바이트)을 바이너리로 수신합니다.
+ *    서버 인증서는 내장한 Let's Encrypt 루트(ISRG Root X1/X2/YE/YR)로 검증하고,
+ *    인증서의 도메인이 WS_HOST 와 같은지도 확인합니다.
+ *  - 핸드셰이크에 X-Device-Token 헤더(DEVICE_TOKEN)를 실어 보냅니다.
+ *    토큰이 틀리면 서버가 HTTP 403 으로 거부합니다.
  *  - 수신된 데이터를 메모리 버퍼에 저장한 뒤,
  *    updateDisplay()를 호출하여 화면을 갱신합니다.
- *  - 연결이 끊어지면 자동으로 재연결을 시도합니다.
+ *  - 마지막으로 그린 프레임과 CRC32 가 같으면 다시 그리지 않습니다.
+ *    (재접속할 때마다 서버가 현재 프레임을 다시 보내므로 E-paper 수명 보호)
+ *    서버가 {"type":"force_refresh"} 를 보내면 다음 프레임은 무조건 그립니다.
+ *  - 화면 갱신 사이에는 최소 5초 간격을 둡니다 (서버 제한과 별개인 디바이스 자체 보호).
+ *    기다리는 동안 더 새 프레임이 오면 마지막 프레임만 그립니다.
+ *  - 소프트웨어 재시작(ESP.restart) 뒤에는 RTC 메모리에 남긴 CRC 로
+ *    화면을 지우지 않고 이어서 동작합니다. 전원 투입 등 다른 리셋은 화면을 지웁니다.
+ *  - 연결이 끊어지면 자동으로 재연결을 시도하고,
+ *    Wi-Fi 가 5분 넘게 끊겨 있으면 재시작합니다.
+ *  - 접속 직후 hello, 이후 5분마다와 화면 갱신 직후 status 보고(JSON)를 보냅니다.
  *
  *  라이브러리 의존성:
  *    - WiFi.h          (ESP32 내장)
@@ -20,8 +33,12 @@
 
 #include <WiFi.h>
 #include <WebSocketsClient.h>
+#include <esp_mac.h>     // esp_read_mac() — 디바이스 ID
+#include <esp_timer.h>   // esp_timer_get_time() — 가동 시간
 #include "src/EPD.h"
 #include "src/EPD_GUI.h"
+
+#define FW_VERSION "1.1.0"   // 펌웨어 버전 (hello 보고에 포함)
 
 // ──────────────────────────────────────────────
 //  사용자 설정 영역 (Wi-Fi / WebSocket 서버)
@@ -32,8 +49,14 @@ const char* WIFI_SSID     = "YOUR_WIFI_SSID";      // 사용할 Wi-Fi SSID
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";   // 사용할 Wi-Fi 비밀번호
 
 // WebSocket 서버 정보
+// TLS 를 쓸 때 WS_HOST 는 인증서에 적힌 도메인이어야 한다 (IP 로 적으면 인증서 검증에 실패)
 const char* WS_HOST = "SERVER_IP";   // WebSocket 서버 IP 또는 도메인
-const uint16_t WS_PORT = 5000;       // WebSocket 서버 포트
+const char* DEVICE_TOKEN = "YOUR_DEVICE_TOKEN";   // 서버 .env 의 DEVICE_TOKEN 과 같은 값
+
+// true : wss:// — Caddy(443) 뒤의 운영 서버. 아래 ROOT_CA_PEM 으로 인증서를 검증한다
+// false: ws://  — LAN 에서 개발 서버(python main.py)에 평문으로 직접 붙을 때만. WS_PORT 를 5000 으로 바꿀 것
+const bool WS_USE_TLS = true;
+const uint16_t WS_PORT = 443;        // WebSocket 서버 포트 (TLS: 443, 평문 개발 서버: 5000)
 const char* WS_PATH = "/ws";         // WebSocket 엔드포인트 경로
 
 // ──────────────────────────────────────────────
@@ -45,6 +68,120 @@ const uint16_t DISPLAY_HEIGHT = 416;    // 디스플레이 세로 해상도 (= E
 const size_t   FRAME_BUFFER_SIZE = 12480; // 240 × 416 ÷ 8 = 12,480 바이트 (1-bit BW)
 
 // ──────────────────────────────────────────────
+//  연결 감시 / 상태 보고 관련 상수
+// ──────────────────────────────────────────────
+
+const unsigned long STATUS_INTERVAL_MS   = 5UL * 60UL * 1000UL;  // 연결 중 status 보고 주기 (5분)
+const unsigned long WIFI_LOST_RESTART_MS = 5UL * 60UL * 1000UL;  // Wi-Fi 가 이 시간 동안 계속 끊겨 있으면 재시작 (5분)
+// 화면 갱신 사이 최소 간격. 서버의 푸시 제한(3초)과 별개로, 서버가 탈취되거나 도메인(DNS)이
+// 가로채여 프레임을 쏟아내도 E-paper 수명을 지키기 위한 디바이스 자체 보호 장치
+const unsigned long MIN_REFRESH_INTERVAL_MS = 5000;
+const uint32_t RTC_STATE_MAGIC = 0x45494E4B;                     // "EINK" — RTC 메모리의 화면 상태가 유효하다는 표시
+
+// ──────────────────────────────────────────────
+//  TLS 루트 인증서 (Let's Encrypt: ISRG Root X1, X2, YE, YR)
+// ──────────────────────────────────────────────
+//  - 네 루트 인증서를 PEM 그대로 이어 붙인 문자열. 서버 체인이 이 중 하나로 이어지면 통과한다
+//    (2026-10 현재 체인: 서버 ← YE1 ← Root YE(X2 교차서명) ← X2(X1 교차서명).
+//     교차서명이 빠지더라도 새 루트 YE/YR 로 검증되도록 함께 넣어 둔다)
+//  - mbedTLS 가 체인과 호스트 이름(WS_HOST)을 검증하고, 실패하면 접속하지 않고 5초 뒤 다시 시도한다
+//  - 이 코어(esp32 3.3.7)의 mbedTLS 는 인증서 유효기간(날짜)을 검사하지 않도록 빌드되어 있어
+//    (CONFIG_MBEDTLS_HAVE_TIME_DATE 꺼짐) NTP 시간 동기화 없이도 검증이 동작한다
+//  - SHA-256 지문
+//      ISRG Root X1: 96:BC:EC:06:26:49:76:F3:74:60:77:9A:CF:28:C5:A7:CF:E8:A3:C0:AA:E1:1A:8F:FC:EE:05:C0:BD:DF:08:C6
+//      ISRG Root X2: 69:72:9B:8E:15:A8:6E:FC:17:7A:57:AF:B7:17:1D:FC:64:AD:D2:8C:2F:CA:8C:F1:50:7E:34:45:3C:CB:14:70
+//      Root YE     : E1:4F:FC:AD:5B:00:25:73:10:06:CA:A4:3A:12:1A:22:D8:E9:70:0F:4F:B9:CF:85:2F:02:A7:08:AA:5D:56:66
+//      Root YR     : E5:7B:7E:6F:15:0C:41:91:02:E8:D5:C0:55:72:9F:F9:67:B9:D1:A8:29:BF:00:CE:C8:9C:A6:04:EB:F4:A8:6F
+const char ROOT_CA_PEM[] =
+  "-----BEGIN CERTIFICATE-----\n"
+  "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\n"
+  "-----END CERTIFICATE-----\n"
+  "-----BEGIN CERTIFICATE-----\n"
+  "MIICGzCCAaGgAwIBAgIQQdKd0XLq7qeAwSxs6S+HUjAKBggqhkjOPQQDAzBPMQsw\n"
+  "CQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJuZXQgU2VjdXJpdHkgUmVzZWFyY2gg\n"
+  "R3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBYMjAeFw0yMDA5MDQwMDAwMDBaFw00\n"
+  "MDA5MTcxNjAwMDBaME8xCzAJBgNVBAYTAlVTMSkwJwYDVQQKEyBJbnRlcm5ldCBT\n"
+  "ZWN1cml0eSBSZXNlYXJjaCBHcm91cDEVMBMGA1UEAxMMSVNSRyBSb290IFgyMHYw\n"
+  "EAYHKoZIzj0CAQYFK4EEACIDYgAEzZvVn4CDCuwJSvMWSj5cz3es3mcFDR0HttwW\n"
+  "+1qLFNvicWDEukWVEYmO6gbf9yoWHKS5xcUy4APgHoIYOIvXRdgKam7mAHf7AlF9\n"
+  "ItgKbppbd9/w+kHsOdx1ymgHDB/qo0IwQDAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0T\n"
+  "AQH/BAUwAwEB/zAdBgNVHQ4EFgQUfEKWrt5LSDv6kviejM9ti6lyN5UwCgYIKoZI\n"
+  "zj0EAwMDaAAwZQIwe3lORlCEwkSHRhtFcP9Ymd70/aTSVaYgLXTWNLxBo1BfASdW\n"
+  "tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1\n"
+  "/q4AaOeMSQ+2b1tbFfLn\n"
+  "-----END CERTIFICATE-----\n"
+  "-----BEGIN CERTIFICATE-----\n"
+  "MIIB2TCCAWCgAwIBAgIRAKQCa6LvbHwg1AR+XmWmk4AwCgYIKoZIzj0EAwMwLjEL\n"
+  "MAkGA1UEBhMCVVMxDTALBgNVBAoTBElTUkcxEDAOBgNVBAMTB1Jvb3QgWUUwHhcN\n"
+  "MjUwOTAzMDAwMDAwWhcNNDUwOTAyMjM1OTU5WjAuMQswCQYDVQQGEwJVUzENMAsG\n"
+  "A1UEChMESVNSRzEQMA4GA1UEAxMHUm9vdCBZRTB2MBAGByqGSM49AgEGBSuBBAAi\n"
+  "A2IABDwS/6vhrcVqcbBo+wgdI3fwn9x7DNJJOY/lTOti0vkwuRN87RhEhTH17E7X\n"
+  "yFjWsPYhIPt/wzOqxTd2b+4ZJNy9ID04YywF9U5zasDVyGSNErVNtz8uSGh5izW8\n"
+  "7j77GaNCMEAwDgYDVR0PAQH/BAQDAgEGMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0O\n"
+  "BBYEFKPIJlqOoUzQNWP8myPIOq5W809WMAoGCCqGSM49BAMDA2cAMGQCMHhMr8N9\n"
+  "LdL1VQKs9BdV81r76eXRB6mtjuNjzk6/lBsPNToWLTDzGYgtQKO1jl63uAIwGV7m\n"
+  "onyF377c+MM1oqVNs17sgu7F9YKZwgLmVbeOMDbKAXHtKMDLbiGllCcs8f47\n"
+  "-----END CERTIFICATE-----\n"
+  "-----BEGIN CERTIFICATE-----\n"
+  "MIIFKTCCAxGgAwIBAgIRAOxGNJNgz0sP+KmC2Tqpyj0wDQYJKoZIhvcNAQELBQAw\n"
+  "LjELMAkGA1UEBhMCVVMxDTALBgNVBAoTBElTUkcxEDAOBgNVBAMTB1Jvb3QgWVIw\n"
+  "HhcNMjUwOTAzMDAwMDAwWhcNNDUwOTAyMjM1OTU5WjAuMQswCQYDVQQGEwJVUzEN\n"
+  "MAsGA1UEChMESVNSRzEQMA4GA1UEAxMHUm9vdCBZUjCCAiIwDQYJKoZIhvcNAQEB\n"
+  "BQADggIPADCCAgoCggIBANvGJnN78CTJdWL3+eGfsLN5TrNBJs+VH9hRXqRbwxu9\n"
+  "sGNiB0BD1fcOxbSUQCJIM1xE13Db+5Cw1w0s0EBYsvuIP/6joF0w8cuImbgR1OGg\n"
+  "YbSQ4OpzI+DG8SGuTlcE873OCS+kh3srlo6vl43M5OJg4Aeo1sfHp6kTJDoIiFBN\n"
+  "JAY+OKfX/FUvYKuhjT+no49lmqmupSBI5PkBQiqrEGtWU5uxU/cQWHGu8jSjFBzn\n"
+  "ZqvbNPLMXMLFxCb3WTfrJBXXjqvWG+v4bjzxjjeAtOlU7qarRDvNOyAuQYLln904\n"
+  "M+faKx8hnLCpJ15ZqaEgcNlY+9MMWcC5yvL2A2j3l9+2buggZX+dOE91zYmIdawT\n"
+  "vSZuVvlbRrAlLxIB6pwMBjneXCjYQ8+3BCCjssbSNpZU3hTcBDdhfAlEDlYr6pEa\n"
+  "tnMdmDT5BqnKC92bd0EhM1fbLHioLccLCuievT8ZkPhZrq7Mii7gNXAcUEAR8+lz\n"
+  "Yal+9zTg7C5DALyVOeG/CqfRAMn1KSHCR0NSA6P8tn/mGRlnCct5rtVCLnVySVpU\n"
+  "6H1qGg3DgTOuskf8eahTMiYbI5ezPJmO5ertalskQ1utp74+eDy92PI4ftHKTbq9\n"
+  "IWhH4YZKh3WnJEIt+oQvlYZbY8tpEroKrFB6PFGzrJIDRyts4HqvuH52RFj2zv/B\n"
+  "AgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MB0GA1Ud\n"
+  "DgQWBBTe51tg0CJtQCh9Pw0B/qS1UrRRlDANBgkqhkiG9w0BAQsFAAOCAgEAWHnf\n"
+  "713Bdkq7t5yN2dNIgQakUb94X9WuyhMEHHkgx4oDpSUlnG0w4g94MoqaEUE31ZjR\n"
+  "LU7L5LD1g9ujFHTQu8AD215AHMVQFbm6j8hQxdXHAzDajFNQnOlDJrLjzIx176oy\n"
+  "AjvUtejZx2NNmdb5fd0WGVGsCdoAJ3N8ozo7ajE8t6vfxStZb4BQ9WYJGHUDrv2N\n"
+  "i5tJF6CNiPnlzs3BUfECRbE4JSk+jvy8+VoGiFE8qsH/j78x2fjgQhAQFV7P7Zxy\n"
+  "dBTZ1wEkNpZNW2qnaK1SKBLa+xf6E06YRIq5uaI+HWH8SY1y5VbRgzq40EKg3yxP\n"
+  "06fz+uYAUIFJoLNfhwRCc3Q6pQVuMX3yAjHAes4gk4moGcLQ5p7HAh39yeylZc1J\n"
+  "41sx/jKwLIkPE6Rr1Nf4pxdsxf9SA4yOEiAkDgq04DVxn8hgYFdUtBCuiuVC2heA\n"
+  "EiqVEa+8QZjuw8Gj0EbHXcRd1nInvGqRS1o9Is7YBdQN57X1AYveGBNNqjICSb7c\n"
+  "awuw1EawTDrs13VUlJVEsbQ0/O/1aaV73mCdOQ8azqL2KTv1Ewu1xbquE2S+kdQU\n"
+  "To9TUwat3wUA6cwXh1EfpS/3fJ0aGah5hdpRyoCLDlsSn8tkrjMfFFX0viC+GxHc\n"
+  "sI1ANRYvqSFC2X1VRZfDg+wD6E21BccmifG4yWc=\n"
+  "-----END CERTIFICATE-----\n";
+
+// ──────────────────────────────────────────────
 //  전역 변수
 // ──────────────────────────────────────────────
 
@@ -52,6 +189,28 @@ WebSocketsClient webSocket;              // WebSocket 클라이언트 인스턴�
 
 uint8_t frameBuffer[FRAME_BUFFER_SIZE];  // 서버로부터 수신한 프레임 데이터를 저장할 버퍼
 volatile bool newFrameAvailable = false; // 새로운 프레임 데이터 수신 완료 플래그 (콜백과 loop() 양쪽에서 접근)
+volatile bool forceNextRefresh  = false; // force_refresh 수신 → 다음 프레임은 CRC 가 같아도 다시 그린다
+volatile bool frameBufferUpdated = false; // 콜백이 버퍼를 새로 채움 → loop()가 CRC 를 한 번만 다시 계산
+uint32_t pendingCrc = 0;                 // 그리기를 기다리는 프레임의 CRC32
+bool pendingWaitLogged = false;          // 최소 간격 대기 로그를 프레임마다 한 번만 찍기 위한 표시
+unsigned long lastRefreshAt = 0;         // 마지막 화면 갱신이 끝난 시각 (millis)
+bool refreshedSinceBoot = false;         // 부팅 후 갱신한 적이 있는지 (첫 프레임은 기다리지 않음)
+
+// 소프트웨어 재시작(ESP.restart)에도 값이 남는 RTC 메모리.
+// 전원 투입·브라운아웃 등 다른 리셋 뒤에는 쓰레기 값일 수 있으므로 setup()에서 리셋 원인과 매직으로 거른다.
+RTC_NOINIT_ATTR uint32_t rtcStateMagic;  // RTC_STATE_MAGIC 이면 rtcPanelCrc 가 유효
+RTC_NOINIT_ATTR uint32_t rtcPanelCrc;    // 지금 패널에 표시된 프레임의 CRC32
+
+// 드라이버(src/EPD.cpp)는 직전 이미지를 RAM 의 oldImage 에 두고 다음 갱신 때 "이전 데이터"로 보낸다.
+// 리셋되면 oldImage 가 0 으로 초기화되어 실제 화면과 달라지므로,
+// 부팅 클리어를 건너뛰었다면 첫 갱신 전에 한 번 지워서 드라이버 상태를 화면과 맞춘다.
+bool driverMatchesPanel = false;
+
+char deviceId[13];                       // 디바이스 ID: Wi-Fi STA MAC 12자리 (소문자 hex, 구분자 없음)
+const char* resetReasonName = "other";   // 부팅 원인 (hello 보고용)
+unsigned long lastStatusSentAt = 0;      // 마지막 hello/status 보고 시각 (millis)
+bool wifiDown = false;                   // Wi-Fi 끊김 감시 중인지 여부
+unsigned long wifiDownSince = 0;         // Wi-Fi 가 끊긴 시각 (millis)
 
 // ──────────────────────────────────────────────
 //  함수 전방 선언
@@ -61,6 +220,15 @@ void connectToWiFi();
 void initWebSocket();
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length);
 void updateDisplay(uint8_t* buffer, size_t length);
+void clearPanel();
+void rememberPanelFrame(uint32_t crc);
+uint32_t frameCrc32(const uint8_t* data, size_t length);
+const char* resetReasonToString(esp_reset_reason_t reason);
+unsigned long uptimeSeconds();
+void sendHello();
+void sendStatus();
+void sendReport(char* json, int written, size_t capacity);
+void checkWiFiWatchdog();
 
 // ============================================================
 //  setup() — 초기화
@@ -75,6 +243,20 @@ void setup() {
   Serial.println("========================================");
   Serial.println("  E-ink Status Board — 부팅 시작");
   Serial.println("========================================");
+
+  // 리셋 원인 확인 — 소프트웨어 재시작이면 화면을 지우지 않고 이어서 쓴다
+  const esp_reset_reason_t resetReason = esp_reset_reason();
+  resetReasonName = resetReasonToString(resetReason);
+  Serial.printf("[시스템] 펌웨어 %s, 리셋 원인: %s (%d)\n", FW_VERSION, resetReasonName, (int)resetReason);
+
+  // 디바이스 ID: Wi-Fi STA MAC (eFuse 기반이라 Wi-Fi 연결 전에도 읽을 수 있음)
+  uint8_t mac[6] = {0};
+  if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
+    Serial.println("[시스템] ⚠️  MAC 주소를 읽지 못했습니다.");
+  }
+  snprintf(deviceId, sizeof(deviceId), "%02x%02x%02x%02x%02x%02x",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  Serial.printf("[시스템] 디바이스 ID: %s\n", deviceId);
 
   // 프레임 버퍼를 0으로 초기화
   memset(frameBuffer, 0, FRAME_BUFFER_SIZE);
@@ -93,12 +275,24 @@ void setup() {
   Paint_NewImage(frameBuffer, EPD_W, EPD_H, 0, WHITE);
   Paint_Clear(WHITE);
 
-  // 초기 화면 클리어 (흰색 화면으로 시작)
-  EPD_FastInit();
-  EPD_Display_Clear();
-  EPD_Update();
-  EPD_DeepSleep();
-  Serial.println("[디스플레이] 초기화 완료 (화면 클리어됨)");
+  if (resetReason == ESP_RST_SW && rtcStateMagic == RTC_STATE_MAGIC) {
+    // 소프트웨어 재시작: E-paper 는 전원이 없어도 화면을 유지하므로 지우지 않는다.
+    // 마지막 CRC 도 그대로 두어, 재접속 후 같은 프레임이 오면 다시 그리지 않는다.
+    driverMatchesPanel = false;
+    Serial.printf("[디스플레이] 소프트웨어 재시작 — 화면 유지 (마지막 프레임 CRC %08lX)\n",
+                  (unsigned long)rtcPanelCrc);
+  } else {
+    // 초기 화면 클리어 (흰색 화면으로 시작)
+    rtcStateMagic = 0;
+    clearPanel();
+    driverMatchesPanel = true;
+
+    // 지금 화면은 전부 흰색(0xFF)인 프레임과 같다 — 그 CRC 를 기록해 두면
+    // 프레임을 받기 전에 소프트웨어 재시작이 반복돼도(Wi-Fi 연결 실패 등) 매번 지우지 않는다
+    memset(frameBuffer, WHITE, FRAME_BUFFER_SIZE);
+    rememberPanelFrame(frameCrc32(frameBuffer, FRAME_BUFFER_SIZE));
+    Serial.println("[디스플레이] 초기화 완료 (화면 클리어됨)");
+  }
 
   // 1단계: Wi-Fi 연결
   connectToWiFi();
@@ -122,11 +316,49 @@ void loop() {
 
   // ── 새 프레임이 수신되었으면 디스플레이 갱신 ──
   if (newFrameAvailable) {
-    Serial.println("[디스플레이] 새 프레임 수신 → 화면 갱신 시작");
-    updateDisplay(frameBuffer, FRAME_BUFFER_SIZE);
-    newFrameAvailable = false;  // 플래그 초기화
-    Serial.println("[디스플레이] 화면 갱신 완료");
+    // 콜백이 버퍼를 새로 채웠을 때만 CRC 를 계산한다 (기다리는 동안 더 새 프레임이 오면 그 프레임으로 다시 계산)
+    if (frameBufferUpdated) {
+      frameBufferUpdated = false;
+      pendingCrc = frameCrc32(frameBuffer, FRAME_BUFFER_SIZE);
+      pendingWaitLogged = false;
+    }
+    const unsigned long sinceLastRefresh = millis() - lastRefreshAt;  // millis() 가 넘쳐도 경과 시간으로 맞게 나온다
+
+    if (!forceNextRefresh && rtcStateMagic == RTC_STATE_MAGIC && pendingCrc == rtcPanelCrc) {
+      // 마지막으로 그린 프레임과 같다 (재접속 때 서버가 다시 보낸 경우 등) → 기다리지 않고 바로 버린다
+      newFrameAvailable = false;
+      Serial.printf("[디스플레이] 마지막 화면과 같은 프레임 (CRC %08lX) → 갱신 생략\n", (unsigned long)pendingCrc);
+    } else if (refreshedSinceBoot && sinceLastRefresh < MIN_REFRESH_INTERVAL_MS) {
+      // 직전 갱신 후 최소 간격이 지나지 않았다 → 플래그를 그대로 두고 다음 루프에서 다시 확인한다
+      // (그동안 webSocket.loop()·상태 보고·Wi-Fi 감시는 계속 돈다)
+      if (!pendingWaitLogged) {
+        pendingWaitLogged = true;
+        Serial.printf("[디스플레이] 최소 갱신 간격 대기 — %lu ms 뒤 갱신\n",
+                      MIN_REFRESH_INTERVAL_MS - sinceLastRefresh);
+      }
+    } else {
+      newFrameAvailable = false;  // 플래그 초기화
+      Serial.printf("[디스플레이] 새 프레임 수신 (CRC %08lX%s) → 화면 갱신 시작\n",
+                    (unsigned long)pendingCrc, forceNextRefresh ? ", 강제 새로고침" : "");
+      forceNextRefresh = false;
+      rtcStateMagic = 0;               // 갱신 도중 리셋되면 다음 부팅 때 화면을 지우도록 먼저 무효화
+      updateDisplay(frameBuffer, FRAME_BUFFER_SIZE);
+      rememberPanelFrame(pendingCrc);  // CRC 는 갱신이 끝난 뒤에만 기록
+      lastRefreshAt = millis();        // 최소 간격은 갱신이 끝난 시점부터 잰다
+      refreshedSinceBoot = true;
+      Serial.println("[디스플레이] 화면 갱신 완료");
+      sendStatus();
+    }
   }
+
+  // ── 연결 중이면 5분마다 status 보고 ──
+  if (webSocket.isConnected() && millis() - lastStatusSentAt >= STATUS_INTERVAL_MS) {
+    sendStatus();
+  }
+
+  // ── Wi-Fi 감시: 5분 넘게 끊겨 있으면 재시작 ──
+  // updateDisplay()는 위에서 동기로 끝나므로 화면 갱신 도중에 재시작되는 일은 없다
+  checkWiFiWatchdog();
 
   // 짧은 yield — CPU 부하 방지 (1ms)
   delay(1);
@@ -165,21 +397,69 @@ void connectToWiFi() {
 }
 
 // ============================================================
+//  Wi-Fi 감시 함수
+//  ────────────────────────────────────────────
+//  Wi-Fi 가 WIFI_LOST_RESTART_MS 동안 계속 끊겨 있으면 재시작한다.
+//  (재연결에 끝내 실패한 디바이스가 영원히 멈춰 있지 않도록)
+//  소프트웨어 재시작이므로 화면은 지워지지 않는다.
+// ============================================================
+
+void checkWiFiWatchdog() {
+  if (WiFi.status() == WL_CONNECTED) {
+    if (wifiDown) {
+      wifiDown = false;
+      Serial.println("[Wi-Fi] ✅ 다시 연결됨");
+    }
+    return;
+  }
+
+  if (!wifiDown) {
+    wifiDown = true;
+    wifiDownSince = millis();
+    Serial.println("[Wi-Fi] ⚠️  연결 끊김 — 5분 안에 복구되지 않으면 재시작합니다");
+    return;
+  }
+
+  // millis() 가 넘쳐도(약 49일) 뺄셈 결과는 경과 시간으로 맞게 나온다
+  if (millis() - wifiDownSince >= WIFI_LOST_RESTART_MS) {
+    Serial.println("[Wi-Fi] ❌ 5분 넘게 연결되지 않아 재시작합니다...");
+    Serial.flush();
+    ESP.restart();
+  }
+}
+
+// ============================================================
 //  WebSocket 초기화 함수
 // ============================================================
 
 void initWebSocket() {
-  Serial.printf("[WebSocket] 서버 %s:%d%s 에 연결 시도...\n", WS_HOST, WS_PORT, WS_PATH);
+  Serial.printf("[WebSocket] 서버 %s://%s:%u%s 에 연결 시도...\n",
+                WS_USE_TLS ? "wss" : "ws", WS_HOST, (unsigned)WS_PORT, WS_PATH);
+
+  if (strcmp(DEVICE_TOKEN, "YOUR_DEVICE_TOKEN") == 0) {
+    Serial.println("[WebSocket] ⚠️  DEVICE_TOKEN 이 기본값입니다. 서버가 접속을 거부(HTTP 403)합니다.");
+  }
 
   // WebSocket 서버에 연결 설정
-  // begin(호스트, 포트, 경로)
-  webSocket.begin(WS_HOST, WS_PORT, WS_PATH);
+  if (WS_USE_TLS) {
+    // wss:// — ROOT_CA_PEM 으로 서버 인증서 체인과 호스트 이름(WS_HOST)을 검증한다
+    webSocket.beginSslWithCA(WS_HOST, WS_PORT, WS_PATH, ROOT_CA_PEM);
+  } else {
+    // ws:// — 평문. LAN 개발용 (begin(호스트, 포트, 경로))
+    webSocket.begin(WS_HOST, WS_PORT, WS_PATH);
+  }
+
+  // 핸드셰이크에 디바이스 토큰 헤더를 싣는다.
+  // 라이브러리는 이 문자열을 내부 String 으로 복사해 두고 (재)접속할 때마다 보낸다.
+  // (라이브러리 기본값 "Origin: file://" 헤더는 이 값으로 대체된다)
+  String tokenHeader = String("X-Device-Token: ") + DEVICE_TOKEN;
+  webSocket.setExtraHeaders(tokenHeader.c_str());
 
   // 이벤트 핸들러 등록 — 모든 WebSocket 이벤트가 이 함수로 전달됨
   webSocket.onEvent(webSocketEvent);
 
   // 연결이 끊어졌을 때 자동 재연결 설정
-  // 재연결 간격: 5000ms (5초), 타임아웃 없음(0)
+  // 재연결 간격: 5000ms (5초) — TLS 핸드셰이크 실패도 같은 간격으로 재시도한다
   webSocket.setReconnectInterval(5000);
 
   // 하트비트(ping) 설정 — 연결 유지 확인용
@@ -203,25 +483,38 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     // WebSocket 연결이 끊어졌을 때 호출된다.
     // setReconnectInterval()에 의해 자동 재연결이 시도되므로
     // 여기서는 로그만 출력한다.
+    // payload 에는 끊긴 이유가 담길 수 있다 (예: "... HTTP 403" 이면 DEVICE_TOKEN 확인)
     case WStype_DISCONNECTED:
-      Serial.println("[WebSocket] ⚠️  연결 끊김 (DISCONNECTED)");
+      if (payload != NULL && length > 0) {
+        Serial.printf("[WebSocket] ⚠️  연결 끊김 (DISCONNECTED): %.*s\n", (int)length, (const char*)payload);
+      } else {
+        Serial.println("[WebSocket] ⚠️  연결 끊김 (DISCONNECTED)");
+      }
       Serial.println("[WebSocket] 자동 재연결을 시도합니다...");
       break;
 
     // ── 연결 성공 이벤트 ──
     // 서버와 WebSocket 핸드셰이크가 완료되었을 때 호출된다.
     // payload에는 연결된 서버의 URL 정보가 담겨 있다.
+    // 라이브러리가 연결 상태를 WSC_CONNECTED 로 바꾼 뒤 이 이벤트를 부르므로
+    // 콜백 안에서 바로 hello 를 보내도 된다.
     case WStype_CONNECTED:
-      Serial.printf("[WebSocket] ✅ 연결 성공! 서버 URL: %s\n", payload);
+      Serial.printf("[WebSocket] ✅ 연결 성공! 서버 URL: %s\n", (const char*)payload);
+      sendHello();
       Serial.println("[WebSocket] 바이너리 데이터 수신 대기 중...");
       break;
 
     // ── 텍스트 메시지 수신 이벤트 ──
     // 서버가 텍스트(문자열) 데이터를 보냈을 때 호출된다.
-    // 이 프로젝트에서는 주로 바이너리를 사용하지만,
-    // 디버그용 메시지 등을 처리할 수 있다.
+    // 라이브러리가 payload 끝에 NUL 을 붙여 주므로 문자열로 다룰 수 있다 (길이 0 이면 NULL).
+    // {"type":"force_refresh"} 를 받으면 다음 프레임은 CRC 가 같아도 다시 그린다 (잔상 제거용).
     case WStype_TEXT:
-      Serial.printf("[WebSocket] 📨 텍스트 수신 (%d 바이트): %s\n", length, payload);
+      Serial.printf("[WebSocket] 📨 텍스트 수신 (%u 바이트): %s\n",
+                    (unsigned)length, payload != NULL ? (const char*)payload : "");
+      if (payload != NULL && strstr((const char*)payload, "force_refresh") != NULL) {
+        forceNextRefresh = true;
+        Serial.println("[WebSocket] 🔄 강제 새로고침 요청 — 다음 프레임은 무조건 다시 그립니다");
+      }
       break;
 
     // ── 바이너리 데이터 수신 이벤트 (핵심 기능) ──
@@ -231,27 +524,27 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     // 수신 흐름:
     //   1. 데이터 크기 검증
     //   2. frameBuffer에 복사
-    //   3. newFrameAvailable 플래그를 true로 설정
-    //   4. loop()에서 플래그를 확인하고 updateDisplay() 호출
+    //   3. newFrameAvailable·frameBufferUpdated 플래그를 true로 설정
+    //   4. loop()에서 CRC 와 최소 갱신 간격을 확인하고 필요하면 updateDisplay() 호출
+    //      (아직 그리지 않은 프레임이 있으면 덮어써서 가장 새 프레임만 남긴다)
     case WStype_BIN:
-      Serial.printf("[WebSocket] 📦 바이너리 수신: %d 바이트\n", length);
+      Serial.printf("[WebSocket] 📦 바이너리 수신: %u 바이트\n", (unsigned)length);
 
       // 수신 데이터 크기 검증
       if (length == FRAME_BUFFER_SIZE) {
         // 정상 크기 — 프레임 버퍼에 복사
         memcpy(frameBuffer, payload, length);
         newFrameAvailable = true;
+        frameBufferUpdated = true;
         Serial.println("[WebSocket] ✅ 프레임 데이터 버퍼에 저장 완료");
       } else if (length > FRAME_BUFFER_SIZE) {
-        // 예상보다 큰 데이터 — 잘라서 저장 (오버플로우 방지)
-        Serial.printf("[WebSocket] ⚠️  수신 크기(%d)가 버퍼(%d)보다 큼! 잘라서 저장합니다.\n",
-                      length, FRAME_BUFFER_SIZE);
-        memcpy(frameBuffer, payload, FRAME_BUFFER_SIZE);
-        newFrameAvailable = true;
+        // 예상보다 큰 데이터 — 크기가 다른 프레임은 정상 프레임이 아니므로 버린다
+        Serial.printf("[WebSocket] ⚠️  크기 초과 프레임 무시: %u / %u bytes\n",
+                      (unsigned)length, (unsigned)FRAME_BUFFER_SIZE);
       } else {
         // 예상보다 작은 데이터 — 불완전 프레임이므로 무시
-        Serial.printf("[WebSocket] ⚠️  불완전 프레임 무시: %d / %d bytes\n",
-                      length, FRAME_BUFFER_SIZE);
+        Serial.printf("[WebSocket] ⚠️  불완전 프레임 무시: %u / %u bytes\n",
+                      (unsigned)length, (unsigned)FRAME_BUFFER_SIZE);
       }
       break;
 
@@ -271,14 +564,113 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     // ── 에러 이벤트 ──
     // WebSocket 통신 중 에러가 발생했을 때 호출된다.
     case WStype_ERROR:
-      Serial.printf("[WebSocket] ❌ 에러 발생! 길이: %d\n", length);
+      Serial.printf("[WebSocket] ❌ 에러 발생! 길이: %u\n", (unsigned)length);
       break;
 
     // ── 기타 이벤트 ──
     default:
-      Serial.printf("[WebSocket] 알 수 없는 이벤트 (type=%d)\n", type);
+      Serial.printf("[WebSocket] 알 수 없는 이벤트 (type=%d)\n", (int)type);
       break;
   }
+}
+
+// ============================================================
+//  상태 보고 함수
+//  ────────────────────────────────────────────
+//  서버에 JSON 텍스트로 상태를 보고한다.
+//  서버는 apply_device_report()에서 필드의 타입·범위를 검사해 반영한다.
+//    hello : 접속 직후 1회 (id, fw, rssi, uptime_s, reset)
+//    status: 5분마다 + 화면 갱신 직후 (rssi, uptime_s)
+// ============================================================
+
+void sendHello() {
+  char json[160];
+  const int written = snprintf(json, sizeof(json),
+      "{\"type\":\"hello\",\"id\":\"%s\",\"fw\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu,\"reset\":\"%s\"}",
+      deviceId, FW_VERSION, (int)WiFi.RSSI(), uptimeSeconds(), resetReasonName);
+  sendReport(json, written, sizeof(json));
+}
+
+void sendStatus() {
+  char json[80];
+  const int written = snprintf(json, sizeof(json),
+      "{\"type\":\"status\",\"rssi\":%d,\"uptime_s\":%lu}",
+      (int)WiFi.RSSI(), uptimeSeconds());
+  sendReport(json, written, sizeof(json));
+}
+
+void sendReport(char* json, int written, size_t capacity) {
+  lastStatusSentAt = millis();   // 실패해도 다음 주기까지 기다린다 (매 루프 재시도 방지)
+
+  if (written < 0 || (size_t)written >= capacity) {
+    Serial.println("[보고] ⚠️  JSON 버퍼 부족 — 전송 생략");
+    return;
+  }
+  if (!webSocket.isConnected()) {
+    return;
+  }
+
+  if (webSocket.sendTXT(json, (size_t)written)) {
+    Serial.printf("[보고] 📤 %s\n", json);
+  } else {
+    Serial.println("[보고] ⚠️  전송 실패");
+  }
+}
+
+// 부팅 원인을 서버 보고용 문자열로 바꾼다
+const char* resetReasonToString(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON:  return "poweron";
+    case ESP_RST_SW:       return "sw";
+    case ESP_RST_PANIC:    return "panic";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:      return "wdt";
+    case ESP_RST_BROWNOUT: return "brownout";
+    default:               return "other";
+  }
+}
+
+// 부팅 후 경과 시간(초). millis()와 달리 약 49일 뒤에도 넘치지 않는다
+unsigned long uptimeSeconds() {
+  return (unsigned long)(esp_timer_get_time() / 1000000LL);
+}
+
+// ============================================================
+//  프레임 CRC 함수
+//  ────────────────────────────────────────────
+//  CRC-32 (IEEE 802.3, 다항식 0xEDB88320 — zlib.crc32 와 같은 값).
+//  SDK 버전에 묶이지 않도록 ROM 함수 대신 테이블 없이 비트 단위로 계산한다.
+// ============================================================
+
+uint32_t frameCrc32(const uint8_t* data, size_t length) {
+  uint32_t crc = 0xFFFFFFFFu;
+  for (size_t i = 0; i < length; i++) {
+    crc ^= data[i];
+    for (int bit = 0; bit < 8; bit++) {
+      crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+    }
+  }
+  return ~crc;
+}
+
+// 패널에 표시된 프레임의 CRC 를 RTC 메모리에 기록한다 (소프트웨어 재시작 후에도 유지)
+void rememberPanelFrame(uint32_t crc) {
+  rtcPanelCrc   = crc;
+  rtcStateMagic = RTC_STATE_MAGIC;
+}
+
+// ============================================================
+//  화면 클리어 함수
+//  ────────────────────────────────────────────
+//  화면 전체를 흰색으로 지운다. 드라이버의 oldImage 도 흰색으로 맞춰진다.
+// ============================================================
+
+void clearPanel() {
+  EPD_FastInit();
+  EPD_Display_Clear();
+  EPD_Update();
+  EPD_DeepSleep();
 }
 
 // ============================================================
@@ -291,6 +683,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 //  @param length  바이트 배열의 길이 (정상: 12,480 바이트)
 //
 //  흐름:
+//    0. (소프트웨어 재시작 후 첫 갱신일 때만) clearPanel()
 //    1. EPD_FastInit()  — 디스플레이를 DeepSleep에서 깨움
 //    2. EPD_Display()   — raw 바이너리 데이터를 SPI로 전송
 //    3. EPD_Update()    — 전자잉크 화면 갱신 (눈에 보이는 변경)
@@ -299,7 +692,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 
 void updateDisplay(uint8_t* buffer, size_t length) {
   Serial.println("[디스플레이] updateDisplay() 호출됨");
-  Serial.printf("[디스플레이] 버퍼 크기: %d 바이트\n", length);
+  Serial.printf("[디스플레이] 버퍼 크기: %u 바이트\n", (unsigned)length);
 
   // 디버그: 첫 16바이트 출력
   Serial.printf("[디스플레이] 첫 16바이트: ");
@@ -307,6 +700,13 @@ void updateDisplay(uint8_t* buffer, size_t length) {
     Serial.printf("%02X ", buffer[i]);
   }
   Serial.println();
+
+  // 0. 부팅 때 화면 클리어를 건너뛰었다면 드라이버의 이전 이미지(oldImage)가 실제 화면과 다르다.
+  //    이전 데이터가 틀리면 파형에 따라 일부 픽셀이 바뀌지 않을 수 있으므로 한 번 지워서 맞춘다.
+  if (!driverMatchesPanel) {
+    Serial.println("[디스플레이] 재시작 후 첫 갱신 — 드라이버 상태를 맞추려고 먼저 화면을 지웁니다");
+    clearPanel();
+  }
 
   // 1. 디스플레이를 DeepSleep에서 깨움
   EPD_FastInit();
@@ -320,6 +720,7 @@ void updateDisplay(uint8_t* buffer, size_t length) {
 
   // 4. 저전력 모드 진입 (디스플레이 내용은 유지됨)
   EPD_DeepSleep();
+  driverMatchesPanel = true;
 
   Serial.println("[디스플레이] 화면 갱신 완료, DeepSleep 진입");
 }
