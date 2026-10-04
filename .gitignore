@@ -38,8 +38,9 @@ build/
 *.elf
 eink-status-board.ino
 
-# Project specific (runtime data — 프리셋/이미지는 서버마다 다름)
-server/data/presets.json
+# Project specific (runtime data — 프리셋/이미지/상태는 서버마다 다름)
+server/data/*
+!server/data/images/
 server/data/images/*
 !server/data/images/.gitkeep
 GEMINI.md
