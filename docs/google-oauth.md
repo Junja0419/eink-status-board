@@ -116,7 +116,7 @@ journalctl -u eink-status-board -n 20                            # "Google 로�
 브라우저 → / (메인 페이지의 "Google 계정으로 로그인" 버튼) → /login → Google 로그인 → /auth/callback → 서버가 신원 검증 → 허용 목록 확인 → 세션 쿠키 발급
 ```
 
-1. 메인 페이지(`/`)의 버튼이 `/login` 으로 이어지고, `/login` 이 Google 로그인으로 보냅니다 (매번 계정 선택 화면을 띄웁니다). 메인 페이지를 바꿔도 Redirect URI(`/auth/callback`)는 달라지지 않습니다.
+1. 메인 페이지(`/`)의 버튼이 `/login` 으로 이어지고, `/login` 이 Google 로그인으로 보냅니다 (매번 계정 선택 화면을 띄웁니다). 메인 페이지를 바꿔도 Redirect URI(`/auth/callback`)는 달라지지 않습니다. 로그인 전에 일정 제안 링크(`/suggest…`)를 열었다면 그 주소가 `?next=` 로 전달돼, 로그인을 마치면 `/admin` 대신 그 제안 화면으로 돌아갑니다 (`/admin`·`/suggest` 외의 주소는 받지 않습니다).
 2. Google 이 `/auth/callback` 으로 인가 코드를 돌려주면, 서버가 state·nonce·PKCE(S256)·`id_token` 서명을 검증합니다.
 3. 확인된 이메일(`email_verified` 가 true)이 **`ALLOWED_EMAILS` 에 있을 때만** 세션 쿠키 `eink_session` 을 발급합니다. 아니면 403 "접근 권한 없음" 페이지입니다.
 4. 이후 **모든 요청마다** 세션의 이메일이 지금도 `ALLOWED_EMAILS` 에 있는지, 그리고 세션이 로그아웃으로 폐기되지 않았는지 다시 검사합니다. 목록에서 뺀 계정은 서버를 재시작하는 즉시 차단됩니다.

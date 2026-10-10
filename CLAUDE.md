@@ -77,6 +77,8 @@ CrowPanel 3.7" E-paper
 - **본문 크기·업로드 검증 순서**: `auth_gate` 가 인증을 먼저 확인한 뒤 `Transfer-Encoding`(chunked) 은 411, Content-Length 가 한도(`POST /api/presets` 는 5MB+64KB, 그 외 전부 `MAX_JSON_BODY_SIZE` 16KB)를 넘거나 숫자가 아니면 본문 수신 전에 413 → 엔드포인트가 파일을 청크로 읽어 메모리 상한 유지 → `Image.open` 헤더로 픽셀 수 검사(24MP 초과 400) → `convert("RGB")`. 순서를 바꾸면 메모리/디스크 고갈 공격에 노출됨
 - **`python main.py` 로 실행할 때만 적용되는 것**: `SERVER_HOST`/`SERVER_PORT`/`SERVER_RELOAD`, `ws_max_size`(64KB), `proxy_headers` + `forwarded_allow_ips="127.0.0.1"`(Caddy 의 `X-Forwarded-*`)
 - **이미지 파이프라인**: 업로드 → letterbox 리사이즈(416x240) → Floyd-Steinberg 디더링(`img.convert("1")`) → 회전/반전 → byte packing. 단순 threshold 변환하면 이모지/컬러 디테일이 날아가므로 반드시 디더링 사용
+- **일정 제안·복귀 예약**: Power Automate(회사)가 Teams 로 `/suggest?preset=<이름>&until=<종료 시각>` 링크를 보낸다(서버는 일정을 읽지 않는다 — `docs/power-automate.md`). `GET /suggest`(화면만, `static/suggest.html`) → `POST /api/suggestions/apply` 가 적용하고 `pending_revert`(`{revert_to, expected, at}`, 하나뿐, state.json 저장)를 건다. 활성화 본체는 `_activate_core(preset, force, expected_current)` — 교체 직전 ID 를 돌려주고, `expected_current` 가 현재와 다르면 아무것도 안 바꾸며, 교체 후 현재가 `expected` 와 다르면 예약을 지운다. 세 판단 모두 `_activate_lock` 안. 복귀 대상은 연속 일정이면 처음 상태(`old.revert_to`)를 유지. 타이머(`_revert_task`)는 lifespan 이 복원 직후 걸고(지난 시각이면 즉시) 종료 시 끈다. `until` 은 `parse_until`(정규식, 오프셋 없으면 UTC, 64자, 24시간 이내만 예약, 지난 시각 409) — `fromisoformat` 으로 바꾸지 말 것(3.10)
+- **로그인 후 복귀(`next`)**: 미인증 브라우저 `GET /suggest…` 만 `/?next=<주소>` 로 보낸다. `/` 의 버튼(login.html JS) → `/login?next=` → `session["next"]` → 콜백 성공 시 `session.clear()` 전에 꺼내 그리로 303. 모든 지점에서 `_safe_next`(`NEXT_RE` = `/admin`·`/suggest` 만, 1024자)로 다시 검사 — 허용 목록을 넓히거나 절대 URL 을 받지 말 것(open redirect)
 - **Apple 단축어 연동**: `/api/shortcuts/names`가 plain text 줄바꿈 목록 반환 → iOS JSON 파싱 버그 회피 구조. 요청 본문은 `{"name"(1~100자), "force"?}`
 
 ### Firmware (`eink-status-board.ino`)
@@ -93,7 +95,7 @@ CrowPanel 3.7" E-paper
 - **디자인**: Linear 계열 다크 테마. 색·모서리·글꼴은 `:root` 토큰(`--canvas`, `--surface-1..3`, `--hairline*`, `--ink*`, `--primary`)을 쓰고 새 색이 필요하면 토큰부터 추가한다. 라벤더 `--primary` 는 주요 버튼·포커스 링·선택(활성 프리셋) 같은 강조에만 쓰고(카드마다 반복되는 프리셋 '적용' 버튼은 틴트형 `.btn-accent`, 마우스를 올리면 꽉 찬 라벤더), 그라디언트·글로우·이모지 아이콘 대신 선 아이콘(`.i` SVG)을 쓴다. 작은 정보성 글자는 `--ink-subtle` 이상(`--ink-tertiary` 는 대비 부족). `login.html` 과 `_message_page`(main.py)도 같은 값을 쓰므로 색을 바꾸면 세 곳을 함께 고칠 것
 - **파비콘**: `server/static/favicon.svg`·`favicon.ico`·`apple-touch-icon.png` 는 `tools/make_icons.py` 가 한 좌표 정의에서 생성한다(직접 편집하지 말고 스크립트를 고친 뒤 다시 실행). 서빙은 `ICON_FILES` → `_icon_route`
 - 로그인 흐름: `/`(메인, 버튼) → `/login`(Google 로 이동) → `/auth/callback` → `/admin`. 미인증 브라우저 GET 은 `/` 로 303, Admin 의 fetch 401 도 `/` 로 이동. 리디렉션 URI 는 항상 `PUBLIC_BASE_URL + /auth/callback` 이며 메인 페이지 경로와 무관
-- Google 로그인/로그아웃(로그아웃은 HTML 응답이라 fetch 가 아닌 폼 제출), 디바이스 목록, 강제 새로고침, 활성 프리셋 강조, 이름 인라인 변경, 순서 변경, 이미지·텍스트 프리셋 생성(텍스트는 실시간 미리보기), 1-bit 흑백 미리보기, 단축어 가이드(주소는 지금 접속한 `location.origin` 으로 채움 — 운영에서는 항상 https)
+- Google 로그인/로그아웃(로그아웃은 HTML 응답이라 fetch 가 아닌 폼 제출), 디바이스 목록, 강제 새로고침, 활성 프리셋 강조, 이름 인라인 변경, 순서 변경, 이미지·텍스트 프리셋 생성(텍스트는 실시간 미리보기), 1-bit 흑백 미리보기, 단축어 가이드(주소는 지금 접속한 `location.origin` 으로 채움 — 운영에서는 항상 https), 일정 제안 복귀 예약 표시와 [취소](`/status.pending_revert`)
 
 ## Key Constants
 
@@ -110,6 +112,7 @@ CrowPanel 3.7" E-paper
 | Push interval | 3초 | `MIN_PUSH_INTERVAL` (env), `STATE_PERSIST_DELAY` 2초 |
 | Secrets | `SESSION_SECRET` ≥32자, `API_KEY`/`DEVICE_TOKEN` ≥24자 | 시작 시 검사 |
 | Session | 30일 | `SESSION_MAX_AGE` |
+| Suggest | until 64자 / 복귀 예약 24시간 이내 / next 1024자 | `MAX_UNTIL_LENGTH`, `MAX_REVERT_AHEAD`, `MAX_NEXT_LENGTH` |
 
 ## Environment Variables
 
@@ -127,6 +130,7 @@ CrowPanel 3.7" E-paper
 - `docs/deploy-gcp.md` — GCP e2-micro + DuckDNS + Caddy(HTTPS) + systemd 배포, 검증 체크리스트, 보안 모델
 - `docs/google-oauth.md` — Google OAuth 클라이언트 생성, 접근 제한 방식, 문제 해결
 - `docs/apple-shortcuts.md` — 마스터 단축어 구성 절차(`X-API-Key` 헤더 포함)
+- `docs/power-automate.md` — Outlook 일정 → Teams 제안 흐름(A/B), 메일 대체 경로, 문제 해결
 - `GEMINI.md` — git 제외, 다른 에이전트용 요약. 유지보수 대상 아님
 
 ## Important Gotchas
@@ -139,3 +143,4 @@ CrowPanel 3.7" E-paper
 - **인증 모델 유지**: 새 라우트는 자동으로 세션 필요(그대로 둘 것). 상태를 바꾸는 동작은 GET 으로 만들지 말 것(SameSite=Lax 쿠키는 교차 사이트 GET 내비게이션에 실린다). `/logout` 은 전역 폐기이므로 유효한 세션 확인 없이 폐기하게 바꾸지 말 것(교차 사이트 POST 로 강제 로그아웃 가능해짐). `/auth/callback` 의 오류 분기에서 세션을 지우는 것도 같은 이유로 금지(교차 사이트 GET 으로 도달 가능). https 판정은 `PUBLIC_IS_HTTPS` 상수를 쓰고 직접 `startswith("https://")` 하지 말 것. 로그·응답·문서에 `API_KEY`/`DEVICE_TOKEN`/세션 값/실제 이메일을 남기지 말 것(문서는 `you@gmail.com`, `<도메인>` 같은 자리표시자). Caddy 접근 로그는 헤더 유출 방지를 위해 의도적으로 꺼 둠
 - **TLS 체인**: 펌웨어는 ISRG 루트만 신뢰하므로 서버 인증서는 Let's Encrypt 여야 한다. `WS_HOST` 는 IP 가 아니라 인증서의 도메인이어야 함
 - **requirements**: `starlette>=0.49.1` 은 multipart·FileResponse Range DoS 권고 때문이므로 낮추지 말 것
+- **Python 3.10**: 운영 VM 은 Python 3.10.12. 3.11+ 전용 API(`fromisoformat` 의 `Z`·7자리 소수 초, `datetime.UTC`, `asyncio.TaskGroup`)를 쓰지 말 것. 테스트는 `TEST_PY=.omc/scratch/venv310/bin/python` 으로도 돌린다

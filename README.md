@@ -3,6 +3,7 @@
 ESP32-S3 + **CrowPanel 3.7" E-paper** 로 만드는 실시간 상태 표시판.
 Admin 페이지에 "회의 중", "자리 비움" 같은 상태를 이미지나 텍스트로 등록해 두고,
 iPhone 단축어·브라우저·curl 어디서든 한 번에 전자잉크 화면을 바꿉니다.
+회사 Outlook 일정에 맞춰 Teams 로 "'회의 중'으로 바꾸시겠어요?" 제안을 받고, 일정이 끝나면 이전 상태로 돌아가게 할 수도 있습니다 ([Power Automate 연동](docs/power-automate.md)).
 서버는 HTTPS 로 공개되고, 브라우저는 Google 로그인, 단축어는 API 키, ESP32 는 디바이스 토큰으로 인증합니다.
 
 ```mermaid
@@ -192,7 +193,7 @@ ESP32 시리얼 모니터(115200)에 `[WebSocket] ✅ 연결 성공!` 이 뜨고
 | 디바이스 토큰 | `X-Device-Token: <DEVICE_TOKEN>` 헤더 (WebSocket 핸드셰이크) |
 
 - 모든 HTTP 경로는 **기본적으로 세션이 필요**합니다. 예외는 `/`(로그인 전 메인 페이지), `/healthz`, `/login`, `/auth/callback`, `/logout`, 파비콘 3개(공개)와 `/api/shortcuts/*` 두 경로(API 키 허용)뿐입니다.
-- 인증에 실패하면 `Accept` 에 `text/html` 이 있는 GET(브라우저 주소창)은 `303` 으로 로그인 전 메인 페이지(`/`)에 보내고, 그 외에는 `401 {"detail":"로그인이 필요합니다."}` 를 돌려줍니다.
+- 인증에 실패하면 `Accept` 에 `text/html` 이 있는 GET(브라우저 주소창)은 `303` 으로 로그인 전 메인 페이지(`/`, `/suggest…` 는 `/?next=<그 주소>`)에 보내고, 그 외에는 `401 {"detail":"로그인이 필요합니다."}` 를 돌려줍니다.
 - 오류 본문은 `{"detail": "..."}` 입니다. 요청 본문 검증 실패는 `422` 입니다.
 - 인증을 통과한 뒤 본문 크기를 검사합니다. 이미지 업로드(`POST /api/presets`)는 5MB, 그 외 모든 요청은 16KB 를 넘으면 `413`, `Content-Length` 없이 chunked 로 보내면 `411` 입니다. 브라우저·단축어·curl 은 `Content-Length` 를 자동으로 보냅니다.
 - `AUTH_DISABLED=true` 이면 아래 인증 열은 무시되고 모든 경로가 열려 있습니다.
@@ -205,15 +206,16 @@ ESP32 시리얼 모니터(115200)에 `[WebSocket] ✅ 연결 성공!` 이 뜨고
 | `GET` | `/login` | 없음 | Google 로그인으로 리다이렉트 (계정 선택 화면). 메인 페이지의 버튼이 여기로 옵니다. 이미 로그인했으면 `303` → `/admin`. Google 의 설정 문서를 받아오지 못하면 `502` 안내 페이지(HTML) |
 | `GET` | `/auth/callback` | 없음 | Google 콜백. 허용된 계정이면 세션 발급 후 `303` → `/admin`. 안내 페이지(HTML): `403` 허용되지 않은 계정·미인증 이메일, `400` 로그인 실패, `502` Google 통신 실패. 인증 오류(400/502)는 기존 세션을 건드리지 않음 (교차 사이트 이동으로 강제 로그아웃시킬 수 없도록). Google 로그인을 마친 뒤 허용되지 않은 계정(403)일 때만 기존 세션을 지움 |
 | `POST` | `/logout` | 없음 | 로그아웃. **유효한 세션으로 호출하면 서버의 세션 세대 값을 새 무작위 값으로 바꿔, 그 전에 발급된 모든 세션을 폐기**함 (다른 브라우저·기기, 복사된 쿠키, 다른 허용 계정의 세션 포함). 세션 없이 온 요청(교차 사이트 POST 등)은 아무것도 폐기하지 않음. `200` 안내 페이지(HTML). 폐기를 디스크에 저장하지 못하면 `500` "로그아웃 저장 실패" 페이지가 `SESSION_SECRET` 교체를 안내 |
-| `GET` | `/` | 없음 | 로그인 전 메인 페이지(`static/login.html`, "Google 계정으로 로그인" 버튼 → `/login`). 이미 로그인했으면 `303` → `/admin` |
+| `GET` | `/` | 없음 | 로그인 전 메인 페이지(`static/login.html`, "Google 계정으로 로그인" 버튼 → `/login`). 이미 로그인했으면 `303` → `/admin` (`?next=` 가 허용된 주소 `/admin`·`/suggest…` 면 그리로). `next` 는 `/login?next=` → 로그인 후 콜백이 그 주소로 보냄 |
 | `GET` | `/admin` | 세션 | 관리자 페이지 |
+| `GET` | `/suggest` | 세션 | 일정 제안 확인 화면 (`?preset=<이름>&until=<종료 시각>`). 열기만 해서는 아무것도 바뀌지 않음 |
 | `GET` | `/favicon.ico`, `/favicon.svg`, `/apple-touch-icon.png` | 없음 | 파비콘·홈 화면 아이콘 (로그인 전 페이지에서도 쓰므로 공개, 하루 캐시) |
 
 ### 상태·디스플레이
 
 | Method | Endpoint | 인증 | 설명 |
 |--------|----------|------|------|
-| `GET` | `/status` | 세션 | `200` JSON: `text`(현재 프리셋 이름), `active_preset_id`, `connected_clients`, `frame_ready`, `frame_size_bytes`, `devices[]`, `auth_enabled`, `user`(로그인 이메일) |
+| `GET` | `/status` | 세션 | `200` JSON: `text`(현재 프리셋 이름), `active_preset_id`, `connected_clients`, `frame_ready`, `frame_size_bytes`, `devices[]`, `auth_enabled`, `user`(로그인 이메일), `pending_revert`(일정 종료 복귀 예약 `{at, revert_to_id, revert_to_name}` 또는 `null`) |
 | `GET` | `/current-preview.png` | 세션 | 현재 화면의 1-bit 미리보기 (캐시 안 함). 표시된 적 없으면 빈 흰 화면 |
 | `POST` | `/api/display/refresh` | 세션 | 현재 화면을 디바이스가 다시 그리게 함(잔상 제거). `200 {"success": true, "clients_notified": n, "deferred": false}`. 표시 중인 화면이 없으면 `409`. 직전 전송 후 3초 이내면 `deferred: true` ([전송 간격 제한](#프레임-중복-억제와-강제-새로고침)) |
 
@@ -229,6 +231,17 @@ ESP32 시리얼 모니터(115200)에 `[WebSocket] ✅ 연결 성공!` 이 뜨고
 | `uptime_s` | 마지막 보고 시점의 가동 시간(초) |
 | `reset` | 마지막 부팅 원인 (`poweron`, `sw` 등) |
 | `connected_at`, `last_seen` | ISO 8601 UTC 시각 |
+
+### 일정 제안
+
+| Method | Endpoint | 인증 | 설명 |
+|--------|----------|------|------|
+| `POST` | `/api/suggestions/apply` | 세션 | 본문 `{"preset_id": "<8자리 hex>", "until": "<ISO 8601>" \| null}`. 프리셋을 적용하고 `until` 에 바꾸기 직전 프리셋으로 돌아가도록 예약. 응답은 활성화 결과 + `revert`(예약 또는 `null`). `until` 이 지났으면 `409`(적용 안 함), 없거나 형식이 틀리거나 24시간 넘게 남았으면 적용만 함. 연속 일정이면 처음 상태를 복귀 대상으로 유지 |
+| `DELETE` | `/api/suggestions/revert` | 세션 | 복귀 예약 취소 → `{"cancelled": true \| false}` |
+
+- `until` 은 `Z`·`+09:00` 같은 오프셋을 붙이거나, 없으면 UTC 로 읽습니다. 7자리 소수 초(Power Automate 형식)도 받습니다.
+- 복귀는 그 시각에 **제안한 프리셋이 아직 표시 중일 때만** 합니다. 그 사이 다른 프리셋을 직접 적용하면 예약이 바로 사라집니다. 되돌릴 프리셋이나 제안한 프리셋을 지워도 사라집니다.
+- 예약은 하나뿐이며 `state.json` 에 저장돼 서버를 재시작해도 이어집니다. 재시작 중에 시각이 지났으면 시작 직후 처리합니다.
 
 ### 프리셋
 
@@ -360,7 +373,7 @@ E-ink 는 갱신 횟수가 곧 수명이라, 같은 화면을 다시 그리지 �
 |------|------|
 | `server/data/presets.json` | 프리셋 메타데이터 `id`, `name`, `image_filename`, `created_at`. **배열 순서가 Admin 카드 순서이자 단축어 목록 순서** |
 | `server/data/images/{id}.png` | 416×240 으로 정규화된 이미지 |
-| `server/data/state.json` | `active_preset_id`(마지막 활성 프리셋), `session_generation`(세션 세대 — 무작위 정수. 로그인 세션 쿠키는 발급 당시의 세대를 담고 있으며 서버의 현재 값과 같을 때만 유효, 로그아웃 때 새 값으로 교체), `devices`(디바이스 접속 이력) |
+| `server/data/state.json` | `active_preset_id`(마지막 활성 프리셋), `session_generation`(세션 세대 — 무작위 정수. 로그인 세션 쿠키는 발급 당시의 세대를 담고 있으며 서버의 현재 값과 같을 때만 유효, 로그아웃 때 새 값으로 교체), `devices`(디바이스 접속 이력), `pending_revert`(일정 종료 복귀 예약: 되돌릴 프리셋·제안한 프리셋·시각) |
 
 - 모두 임시 파일 + `os.replace` 로 원자적으로 저장하며 git 에서 제외됩니다.
 - `state.json` 은 활성화·활성 프리셋 삭제 때 즉시, 디바이스의 `hello`·연결 해제 때는 2초 안에 몰린 변경을 묶어 한 번 저장합니다. 서버를 정상 종료할 때도 마지막으로 저장합니다. `status` 보고(5분마다)는 메모리에만 반영됩니다.
@@ -411,6 +424,7 @@ sequenceDiagram
 - [GCP 무료 티어 배포 가이드](docs/deploy-gcp.md) — e2-micro, DuckDNS, Caddy(HTTPS), systemd, 검증 체크리스트, [보안 모델](docs/deploy-gcp.md#15-보안-모델)
 - [Google 로그인 설정](docs/google-oauth.md) — OAuth 클라이언트 만들기, 접근 제한 방식, 문제 해결
 - [Apple 단축어 연동](docs/apple-shortcuts.md) — 마스터 단축어 만들기, API 키, 문제 해결
+- [Power Automate 연동](docs/power-automate.md) — Outlook 일정 → Teams 제안 메시지, 시간대 제안, 문제 해결
 
 ## 참고 사항
 
