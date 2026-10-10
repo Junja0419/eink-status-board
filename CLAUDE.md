@@ -90,7 +90,7 @@ CrowPanel 3.7" E-paper
 
 ### Admin UI (`server/static/admin.html`)
 - Vanilla HTML/JS/CSS 단일 파일, 외부 프레임워크 없음
-- **디자인**: Linear 계열 다크 테마. 색·모서리·글꼴은 `:root` 토큰(`--canvas`, `--surface-1..3`, `--hairline*`, `--ink*`, `--primary`)을 쓰고 새 색이 필요하면 토큰부터 추가한다. 라벤더 `--primary` 는 주요 버튼·포커스 링·선택(활성 프리셋) 같은 강조에만 쓰고, 그라디언트·글로우·이모지 아이콘 대신 선 아이콘(`.i` SVG)을 쓴다. 작은 정보성 글자는 `--ink-subtle` 이상(`--ink-tertiary` 는 대비 부족). `login.html` 과 `_message_page`(main.py)도 같은 값을 쓰므로 색을 바꾸면 세 곳을 함께 고칠 것
+- **디자인**: Linear 계열 다크 테마. 색·모서리·글꼴은 `:root` 토큰(`--canvas`, `--surface-1..3`, `--hairline*`, `--ink*`, `--primary`)을 쓰고 새 색이 필요하면 토큰부터 추가한다. 라벤더 `--primary` 는 주요 버튼·포커스 링·선택(활성 프리셋) 같은 강조에만 쓰고(카드마다 반복되는 프리셋 '적용' 버튼은 틴트형 `.btn-accent`, 마우스를 올리면 꽉 찬 라벤더), 그라디언트·글로우·이모지 아이콘 대신 선 아이콘(`.i` SVG)을 쓴다. 작은 정보성 글자는 `--ink-subtle` 이상(`--ink-tertiary` 는 대비 부족). `login.html` 과 `_message_page`(main.py)도 같은 값을 쓰므로 색을 바꾸면 세 곳을 함께 고칠 것
 - **파비콘**: `server/static/favicon.svg`·`favicon.ico`·`apple-touch-icon.png` 는 `tools/make_icons.py` 가 한 좌표 정의에서 생성한다(직접 편집하지 말고 스크립트를 고친 뒤 다시 실행). 서빙은 `ICON_FILES` → `_icon_route`
 - 로그인 흐름: `/`(메인, 버튼) → `/login`(Google 로 이동) → `/auth/callback` → `/admin`. 미인증 브라우저 GET 은 `/` 로 303, Admin 의 fetch 401 도 `/` 로 이동. 리디렉션 URI 는 항상 `PUBLIC_BASE_URL + /auth/callback` 이며 메인 페이지 경로와 무관
 - Google 로그인/로그아웃(로그아웃은 HTML 응답이라 fetch 가 아닌 폼 제출), 디바이스 목록, 강제 새로고침, 활성 프리셋 강조, 이름 인라인 변경, 순서 변경, 이미지·텍스트 프리셋 생성(텍스트는 실시간 미리보기), 1-bit 흑백 미리보기, 단축어 가이드(주소는 지금 접속한 `location.origin` 으로 채움 — 운영에서는 항상 https)

@@ -32,6 +32,8 @@
       --primary-hover: #828fff;
       --primary-focus: #5e69d1;
       --focus-ring: rgba(94, 105, 209, 0.5);
+      --primary-tint: rgba(94, 106, 210, 0.16);
+      --primary-tint-border: rgba(94, 106, 210, 0.42);
       --success: #27a644;
       --danger: #eb5757;
       --danger-bg: rgba(235, 87, 87, 0.12);
@@ -433,6 +435,22 @@
     .btn-secondary:hover:not(:disabled) {
       background: var(--surface-3);
       border-color: var(--hairline-tertiary);
+    }
+    /* 카드마다 반복되는 주요 동작(프리셋 적용) — 평소엔 라벤더 틴트, 올리면 꽉 찬 라벤더 */
+    .btn-accent {
+      background: var(--primary-tint);
+      border-color: var(--primary-tint-border);
+      color: var(--primary-hover);
+    }
+    .btn-accent:hover:not(:disabled) {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+    }
+    .btn-accent:active:not(:disabled) {
+      background: var(--primary-focus);
+      border-color: var(--primary-focus);
+      color: #fff;
     }
     .btn-ghost {
       background: transparent;
@@ -1535,7 +1553,7 @@
               <div class="preset-actions">
                 <button class="btn btn-ghost btn-sm btn-icon" data-action="move-left" title="앞으로 이동" aria-label="앞으로 이동">${ICONS.left}</button>
                 <button class="btn btn-ghost btn-sm btn-icon" data-action="move-right" title="뒤로 이동" aria-label="뒤로 이동">${ICONS.right}</button>
-                <button class="btn btn-secondary btn-sm" data-action="activate" title="디스플레이에 적용">적용</button>
+                <button class="btn btn-accent btn-sm" data-action="activate" title="디스플레이에 적용">적용</button>
                 <button class="btn btn-ghost btn-danger btn-sm btn-icon" data-action="delete" title="삭제" aria-label="삭제">${ICONS.trash}</button>
               </div>
             </div>
