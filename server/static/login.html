@@ -100,5 +100,14 @@
     </a>
     <p class="note">허용된 Google 계정만 들어올 수 있습니다.<br>로그인 상태는 30일 동안 유지됩니다.</p>
   </main>
+  <script>
+    // 로그인 후 돌아갈 주소를 /login 으로 넘긴다 (서버가 같은 규칙으로 다시 검사한다)
+    (function () {
+      var next = new URLSearchParams(location.search).get('next');
+      if (next && next.length <= 1024 && /^\/(?:admin|suggest)(?:\?[^#\\\s]*)?$/.test(next)) {
+        document.querySelector('a.btn').href = '/login?next=' + encodeURIComponent(next);
+      }
+    })();
+  </script>
 </body>
 </html>

@@ -1254,7 +1254,10 @@ async def auth_gate(request: Request, call_next):
         )
         if not authorized:
             if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
-                return RedirectResponse("/", status_code=303)   # 브라우저는 로그인 전 메인 페이지로
+                # 브라우저는 로그인 전 메인 페이지로. 일정 제안 링크는 로그인 후 그 화면으로 돌아오게 주소를 넘긴다
+                query = request.scope["query_string"].decode("latin-1")
+                nxt = _safe_next(path + ("?" + query if query else "")) if path == "/suggest" else None
+                return RedirectResponse("/?next=" + quote(nxt, safe="") if nxt else "/", status_code=303)
             return JSONResponse(status_code=401, content={"detail": "로그인이 필요합니다."})
 
     # 본문 크기 — 길이를 미리 알 수 없는 chunked 본문은 받지 않고, Content-Length 로 한도를 검사한다.
@@ -1299,8 +1302,15 @@ async def login(request: Request):
     Google 로그인 화면으로 보낸다. 메인 페이지(/)의 "Google 계정으로 로그인" 버튼이 여기로 온다.
     (Google 이 돌아오는 주소는 /auth/callback 으로 고정 — 이 경로는 리디렉션 URI 와 무관하다)
     """
+    nxt = _safe_next(request.query_params.get("next"))
     if AUTH_DISABLED or _session_email(request):
-        return RedirectResponse("/admin", status_code=303)
+        return RedirectResponse(nxt or "/admin", status_code=303)
+
+    # 로그인 후 돌아갈 주소 (허용 목록에 맞을 때만, 콜백이 다시 검사한다)
+    if nxt:
+        request.session["next"] = nxt
+    else:
+        request.session.pop("next", None)
 
     # (완료되지 않은 이전 시도의 state 는 Authlib 이 새 state 를 저장할 때 스스로 정리한다)
     try:
@@ -1335,6 +1345,7 @@ async def auth_callback(request: Request):
     email = str(userinfo.get("email", "")).strip().lower()
 
     # Google 로그인을 실제로 마친 경우에만 여기 도달한다(state 검증 통과) — 교차 사이트로는 유발할 수 없다
+    nxt = _safe_next(request.session.get("next"))   # clear() 전에 꺼내 둔다
     request.session.clear()
     if userinfo.get("email_verified") is not True or email not in ALLOWED_EMAILS:
         logger.warning(f"🚫 허용되지 않은 계정의 로그인 시도: {email!r}")
@@ -1343,7 +1354,7 @@ async def auth_callback(request: Request):
     request.session["email"] = email
     request.session["gen"] = session_generation   # 발급 당시의 세대 — 로그아웃으로 세대가 바뀌면 무효
     logger.info(f"🔑 로그인: {email}")
-    return RedirectResponse("/admin", status_code=303)
+    return RedirectResponse(nxt or "/admin", status_code=303)
 
 
 @app.post("/logout")
@@ -1387,7 +1398,7 @@ async def root(request: Request):
     로그인 버튼은 /login 으로 이어지고, 거기서 Google 로 넘어간다.
     """
     if AUTH_DISABLED or _session_email(request):
-        return RedirectResponse(url="/admin", status_code=303)
+        return RedirectResponse(url=_safe_next(request.query_params.get("next")) or "/admin", status_code=303)
     page = STATIC_DIR / "login.html"
     if not page.exists():
         return RedirectResponse(url="/login", status_code=303)
