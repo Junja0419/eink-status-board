@@ -293,8 +293,14 @@ def _validate_auth_config() -> None:
 
 _validate_auth_config()
 
+# 파비콘 — 로그인 전 페이지에서도 쓰므로 공개. 경로 → (static/ 파일, MIME). tools/make_icons.py 로 만든다
+ICON_FILES = {
+    "/favicon.ico": ("favicon.ico", "image/x-icon"),
+    "/favicon.svg": ("favicon.svg", "image/svg+xml"),
+    "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
+}
 # 세션 없이 접근 가능한 경로 ("/" 는 로그인 전 메인 페이지)
-PUBLIC_PATHS = frozenset({"/", "/healthz", "/login", "/auth/callback", "/logout"})
+PUBLIC_PATHS = frozenset({"/", "/healthz", "/login", "/auth/callback", "/logout", *ICON_FILES})
 # API 키로도 접근 가능한 경로 (그 외 경로는 Google 로그인 세션만 통한다)
 API_KEY_PATHS = frozenset({"/api/shortcuts/names", "/api/shortcuts/activate"})
 
@@ -1137,17 +1143,26 @@ def _message_page(title: str, message: str, status_code: int, link_label: str = 
         content=f"""<!DOCTYPE html>
 <html lang="ko"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
 <title>{html.escape(title)} — E-ink Status Board</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>
-  body {{ margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-         background:#07070e; color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,sans-serif; }}
-  main {{ max-width:360px; padding:32px; text-align:center; }}
-  h1 {{ font-size:20px; margin:0 0 12px; }}
-  p {{ font-size:14px; color:#94a3b8; line-height:1.6; margin:0 0 24px; }}
-  a {{ display:inline-block; padding:10px 20px; border-radius:10px; text-decoration:none;
-       background:linear-gradient(135deg,#7c3aed,#4f46e5); color:#fff; font-size:14px; font-weight:500; }}
+  body {{ margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px;
+         box-sizing:border-box; background:#010102; color:#f7f8f8; -webkit-font-smoothing:antialiased;
+         font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo",sans-serif; }}
+  main {{ width:100%; max-width:380px; padding:32px; text-align:center; background:#0f1011;
+         border:1px solid #23252a; border-radius:12px; box-sizing:border-box; }}
+  img {{ display:block; margin:0 auto 20px; }}
+  h1 {{ font-size:22px; font-weight:600; letter-spacing:-0.4px; margin:0 0 8px; }}
+  p {{ font-size:14px; color:#8a8f98; line-height:1.5; margin:0 0 24px; }}
+  a {{ display:inline-flex; align-items:center; height:36px; padding:0 14px; border-radius:8px;
+       text-decoration:none; background:#5e6ad2; color:#fff; font-size:14px; font-weight:500; }}
+  a:hover {{ background:#828fff; }}
+  a:focus-visible {{ outline:2px solid #828fff; outline-offset:2px; }}
 </style></head>
-<body><main><h1>{html.escape(title)}</h1><p>{html.escape(message)}</p>
+<body><main><img src="/favicon.svg" width="36" height="36" alt="">
+<h1>{html.escape(title)}</h1><p>{html.escape(message)}</p>
 <a href="/">{html.escape(link_label)}</a></main></body></html>""",
     )
 
@@ -1323,6 +1338,19 @@ async def admin_page():
             content={"error": "admin.html 파일을 찾을 수 없습니다."},
         )
     return FileResponse(html_path, media_type="text/html", headers={"Cache-Control": "no-cache"})
+
+
+def _icon_route(filename: str, media_type: str):
+    async def serve_icon():
+        path = STATIC_DIR / filename
+        if not path.exists():
+            return Response(status_code=404)
+        return FileResponse(path, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
+    return serve_icon
+
+
+for _url, (_filename, _media_type) in ICON_FILES.items():
+    app.add_api_route(_url, _icon_route(_filename, _media_type), methods=["GET"], include_in_schema=False)
 
 
 # ──────────────────────────────────────────────

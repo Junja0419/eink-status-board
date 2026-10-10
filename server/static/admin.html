@@ -3,38 +3,45 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#010102">
   <title>E-ink Status Board — Admin</title>
   <meta name="description" content="ESP32 전자잉크 디스플레이 관리자 패널">
-  <link rel="icon" href="data:,">
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
-    /* ── 디자인 토큰 ── */
+    /* ── 디자인 토큰 (Linear 계열 다크 테마) ──
+       라벤더(--primary)는 브랜드 마크·주요 버튼·포커스·선택 표시에만 쓴다. 그라디언트·글로우 없음 */
     :root {
-      --bg-base: #07070e;
-      --bg-surface: rgba(255, 255, 255, 0.03);
-      --bg-surface-hover: rgba(255, 255, 255, 0.06);
-      --bg-input: rgba(255, 255, 255, 0.05);
-      --border: rgba(255, 255, 255, 0.08);
-      --border-focus: rgba(124, 58, 237, 0.5);
-      --text-primary: #e2e8f0;
-      --text-secondary: #94a3b8;
-      --text-muted: #64748b;
-      --accent: #7c3aed;
-      --accent-hover: #6d28d9;
-      --accent-glow: rgba(124, 58, 237, 0.25);
-      --gradient: linear-gradient(135deg, #7c3aed, #4f46e5);
-      --success: #10b981;
-      --success-bg: rgba(16, 185, 129, 0.12);
-      --danger: #ef4444;
-      --danger-bg: rgba(239, 68, 68, 0.12);
-      --warning: #f59e0b;
-      --radius: 16px;
-      --radius-sm: 10px;
-      --radius-xs: 6px;
-      --shadow: 0 4px 32px rgba(0, 0, 0, 0.4);
-      --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      --canvas: #010102;
+      --surface-1: #0f1011;
+      --surface-2: #141516;
+      --surface-3: #18191a;
+      --hairline: #23252a;
+      --hairline-strong: #34343a;
+      --hairline-tertiary: #3e3e44;
+      --ink: #f7f8f8;
+      --ink-muted: #d0d6e0;
+      --ink-subtle: #8a8f98;
+      --ink-tertiary: #62666d;
+      --primary: #5e6ad2;
+      --primary-hover: #828fff;
+      --primary-focus: #5e69d1;
+      --focus-ring: rgba(94, 105, 209, 0.5);
+      --success: #27a644;
+      --danger: #eb5757;
+      --danger-bg: rgba(235, 87, 87, 0.12);
+      --radius-xs: 4px;
+      --radius-sm: 6px;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+      --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+      --transition: 0.15s ease;
     }
 
     /* ── 리셋 & 기본 ── */
@@ -44,79 +51,85 @@
     [hidden] { display: none !important; }
 
     body {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-      background: var(--bg-base);
-      color: var(--text-primary);
       min-height: 100vh;
+      background: var(--canvas);
+      color: var(--ink);
+      font-family: var(--font);
+      font-size: 14px;
+      line-height: 1.5;
       -webkit-font-smoothing: antialiased;
     }
 
-    /* ── 배경 그라디언트 오브 ── */
-    body::before {
-      content: '';
-      position: fixed;
-      top: -30%;
-      right: -10%;
-      width: 600px;
-      height: 600px;
-      background: radial-gradient(circle, rgba(124, 58, 237, 0.08), transparent 70%);
-      pointer-events: none;
-      z-index: 0;
-    }
-    body::after {
-      content: '';
-      position: fixed;
-      bottom: -20%;
-      left: -10%;
-      width: 500px;
-      height: 500px;
-      background: radial-gradient(circle, rgba(79, 70, 229, 0.06), transparent 70%);
-      pointer-events: none;
-      z-index: 0;
+    :focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
     }
 
-    /* ── 레이아웃 ── */
-    .container {
-      position: relative;
-      z-index: 1;
-      max-width: 880px;
-      margin: 0 auto;
-      padding: 24px 20px 60px;
+    /* 선 아이콘 (stroke 는 글자색을 따른다) */
+    .i {
+      width: 16px;
+      height: 16px;
+      flex: none;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.75;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
 
-    /* ── 헤더 ── */
-    .header {
+    code {
+      padding: 1px 5px;
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-xs);
+      background: var(--surface-2);
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 12.5px;
+    }
+
+    /* ── 상단 내비게이션 ── */
+    .topnav {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      height: 56px;
+      background: rgba(1, 1, 2, 0.85);
+      border-bottom: 1px solid var(--hairline);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    .topnav-inner {
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      margin-bottom: 32px;
-      padding-bottom: 20px;
-      border-bottom: 1px solid var(--border);
+      justify-content: space-between;
+      gap: 16px;
+      max-width: 1080px;
+      height: 100%;
+      margin: 0 auto;
+      padding: 0 24px;
     }
-    .header-left h1 {
-      font-size: 22px;
-      font-weight: 700;
-      background: var(--gradient);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-    .header-left p {
-      font-size: 13px;
-      color: var(--text-muted);
-      margin-top: 4px;
-    }
-    .header-right {
+    .brand {
       display: flex;
-      flex-wrap: wrap;
-      justify-content: flex-end;
       align-items: center;
       gap: 10px;
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.1px;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .nav-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
     }
     .user-box {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
+      min-width: 0;
     }
     .user-email {
       max-width: 220px;
@@ -124,81 +137,132 @@
       text-overflow: ellipsis;
       white-space: nowrap;
       font-size: 13px;
-      color: var(--text-secondary);
+      color: var(--ink-subtle);
     }
+
+    /* ── 상태 배지 · 점 ── */
     .status-badge {
-      display: flex;
+      display: inline-flex;
       align-items: center;
       gap: 8px;
-      padding: 8px 14px;
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      font-size: 13px;
-      color: var(--text-secondary);
+      height: 28px;
+      padding: 0 10px;
+      background: var(--surface-2);
+      border: 1px solid var(--hairline);
+      border-radius: 9999px;
+      font-size: 12px;
+      color: var(--ink-muted);
+      white-space: nowrap;
     }
     .status-dot {
       flex: none;
-      width: 8px;
-      height: 8px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
-      background: var(--text-muted);
+      background: var(--ink-tertiary);
       transition: background var(--transition);
     }
     .status-dot.connected {
       background: var(--success);
-      box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+      box-shadow: 0 0 0 3px rgba(39, 166, 68, 0.18);
+    }
+
+    /* ── 레이아웃 ── */
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 40px 24px 80px;
+    }
+    .page-head {
+      margin-bottom: 28px;
+    }
+    .page-head h1 {
+      font-size: 28px;
+      font-weight: 600;
+      line-height: 1.2;
+      letter-spacing: -0.6px;
+    }
+    .page-head p {
+      margin-top: 6px;
+      font-size: 15px;
+      color: var(--ink-subtle);
+    }
+    .layout-top {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      align-items: start;
+      margin-bottom: 48px;
+    }
+    .section {
+      margin-bottom: 48px;
     }
 
     /* ── 카드 ── */
     .card {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
       padding: 24px;
-      margin-bottom: 20px;
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      transition: border-color var(--transition);
+      background: var(--surface-1);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-lg);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
     }
-    .card:hover {
-      border-color: rgba(255, 255, 255, 0.12);
+    .card-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 28px;
+      margin-bottom: 20px;
     }
     .card-title {
-      font-size: 15px;
-      font-weight: 600;
-      color: var(--text-primary);
-      margin-bottom: 16px;
       display: flex;
       align-items: center;
       gap: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.2px;
+      color: var(--ink);
     }
-    .card-title .icon {
-      font-size: 18px;
+    .card-title .i {
+      color: var(--ink-subtle);
+    }
+    .count {
+      padding: 1px 8px;
+      background: var(--surface-2);
+      border: 1px solid var(--hairline);
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--ink-subtle);
+      font-variant-numeric: tabular-nums;
     }
 
     /* ── E-ink 미리보기 프레임 ── */
     .preview-frame {
-      position: relative;
-      background: #1a1a2e;
-      border-radius: 12px;
-      padding: 12px;
       display: flex;
       justify-content: center;
-      align-items: center;
-      box-shadow: inset 0 2px 8px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.2);
+      padding: 20px;
+      background: var(--canvas);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-md);
     }
-    .preview-screen {
+    .preview-bezel {
       width: 100%;
       max-width: 416px;
-      aspect-ratio: 416 / 240;
-      background: #fff;
-      border-radius: 4px;
-      overflow: hidden;
+      padding: 10px;
+      background: var(--surface-3);
+      border: 1px solid var(--hairline-strong);
+      border-radius: 10px;
+    }
+    .preview-screen {
       display: flex;
       justify-content: center;
       align-items: center;
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.1);
+      aspect-ratio: 416 / 240;
+      overflow: hidden;
+      background: #fff;
+      border-radius: 2px;
     }
     .preview-screen img {
       width: 100%;
@@ -207,49 +271,41 @@
       image-rendering: pixelated;
     }
     .preview-label {
+      margin-top: 12px;
       text-align: center;
-      margin-top: 12px;
-      font-size: 12px;
-      color: var(--text-muted);
+      font-size: 13px;
+      color: var(--ink-muted);
       overflow-wrap: anywhere;
-    }
-    .preview-actions {
-      display: flex;
-      justify-content: center;
-      margin-top: 12px;
     }
 
     /* ── 디바이스 목록 ── */
     .device-section {
-      margin-top: 20px;
-      padding-top: 16px;
-      border-top: 1px solid var(--border);
+      margin-top: 24px;
     }
-    .device-heading {
-      font-size: 12px;
+    .subhead {
+      margin-bottom: 8px;
+      font-size: 13px;
       font-weight: 500;
-      color: var(--text-secondary);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 10px;
+      letter-spacing: 0.4px;
+      color: var(--ink-subtle);
     }
     .device-list {
       list-style: none;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
+      overflow: hidden;
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-md);
     }
     .device-row {
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 2px;
       padding: 10px 12px;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
+    }
+    .device-row + .device-row {
+      border-top: 1px solid var(--hairline);
     }
     .device-row.offline .device-id {
-      color: var(--text-secondary);
+      color: var(--ink-subtle);
     }
     .device-main {
       display: flex;
@@ -261,15 +317,15 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-family: var(--mono);
       font-size: 13px;
-      font-weight: 600;
+      font-weight: 500;
     }
     .device-seen {
       flex: none;
       margin-left: auto;
       font-size: 12px;
-      color: var(--text-muted);
+      color: var(--ink-subtle);
     }
     .device-row.connected .device-seen {
       color: var(--success);
@@ -277,44 +333,68 @@
     .device-meta {
       display: flex;
       flex-wrap: wrap;
-      gap: 2px 14px;
-      padding-left: 18px;
+      gap: 2px 12px;
+      padding-left: 17px;
       font-size: 12px;
-      color: var(--text-muted);
+      color: var(--ink-subtle);
       overflow-wrap: anywhere;
     }
     .device-empty {
+      padding: 12px;
       font-size: 13px;
-      color: var(--text-muted);
+      color: var(--ink-subtle);
     }
 
     /* ── 인풋 & 폼 ── */
-    .input-group {
-      display: flex;
-      gap: 10px;
-    }
     input[type="text"], input[type="number"], textarea {
-      flex: 1;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      padding: 12px 16px;
-      font-size: 14px;
+      width: 100%;
+      min-height: 36px;
+      padding: 8px 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--hairline-strong);
+      border-radius: var(--radius-md);
       font-family: inherit;
-      color: var(--text-primary);
+      font-size: 14px;
+      color: var(--ink);
       outline: none;
       transition: border-color var(--transition), box-shadow var(--transition);
     }
+    input[type="text"]:hover, input[type="number"]:hover, textarea:hover {
+      border-color: var(--hairline-tertiary);
+    }
     input[type="text"]:focus, input[type="number"]:focus, textarea:focus {
-      border-color: var(--border-focus);
-      box-shadow: 0 0 0 3px var(--accent-glow);
+      border-color: var(--primary-focus);
+      box-shadow: 0 0 0 2px var(--focus-ring);
     }
     input[type="text"]::placeholder, input[type="number"]::placeholder, textarea::placeholder {
-      color: var(--text-muted);
+      color: var(--ink-tertiary);
     }
     textarea {
       resize: vertical;
       line-height: 1.5;
+    }
+    .form-field {
+      margin-bottom: 16px;
+    }
+    .form-field > label, .form-field > .field-label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--ink-muted);
+    }
+    .form-field > label .optional {
+      font-weight: 400;
+      color: var(--ink-subtle);
+    }
+    .form-field input[type="number"] {
+      max-width: 160px;
+    }
+    .form-hint {
+      margin-bottom: 16px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--ink-subtle);
     }
 
     /* ── 버튼 ── */
@@ -323,126 +403,139 @@
       align-items: center;
       justify-content: center;
       gap: 6px;
-      padding: 10px 20px;
-      border: none;
-      border-radius: var(--radius-sm);
+      height: 36px;
+      padding: 0 14px;
+      border: 1px solid transparent;
+      border-radius: var(--radius-md);
+      font-family: inherit;
       font-size: 14px;
       font-weight: 500;
-      font-family: inherit;
-      cursor: pointer;
-      transition: all var(--transition);
+      line-height: 1;
       white-space: nowrap;
+      cursor: pointer;
+      transition: background-color var(--transition), border-color var(--transition), color var(--transition);
     }
-    .btn:active { transform: scale(0.97); }
     .btn:disabled {
       opacity: 0.5;
       cursor: not-allowed;
-      transform: none;
     }
     .btn-primary {
-      background: var(--gradient);
+      background: var(--primary);
       color: #fff;
-      box-shadow: 0 2px 12px var(--accent-glow);
     }
-    .btn-primary:hover:not(:disabled) {
-      box-shadow: 0 4px 20px rgba(124, 58, 237, 0.4);
+    .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+    .btn-primary:active:not(:disabled) { background: var(--primary-focus); }
+    .btn-secondary {
+      background: var(--surface-2);
+      border-color: var(--hairline-strong);
+      color: var(--ink);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: var(--surface-3);
+      border-color: var(--hairline-tertiary);
     }
     .btn-ghost {
       background: transparent;
-      color: var(--text-secondary);
-      border: 1px solid var(--border);
+      color: var(--ink-subtle);
     }
     .btn-ghost:hover:not(:disabled) {
-      background: var(--bg-surface-hover);
-      color: var(--text-primary);
+      background: var(--surface-3);
+      color: var(--ink);
     }
-    .btn-danger {
+    .btn-ghost.btn-danger:hover:not(:disabled) {
       background: var(--danger-bg);
       color: var(--danger);
-      border: 1px solid rgba(239, 68, 68, 0.2);
-    }
-    .btn-danger:hover:not(:disabled) {
-      background: rgba(239, 68, 68, 0.2);
-    }
-    .btn-success {
-      background: var(--success-bg);
-      color: var(--success);
-      border: 1px solid rgba(16, 185, 129, 0.2);
-    }
-    .btn-success:hover:not(:disabled) {
-      background: rgba(16, 185, 129, 0.2);
     }
     .btn-sm {
-      padding: 7px 12px;
-      font-size: 12px;
-      border-radius: var(--radius-xs);
+      height: 28px;
+      padding: 0 10px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+    }
+    .btn-lg {
+      height: 40px;
     }
     .btn-icon {
-      width: 36px;
-      height: 36px;
+      width: 28px;
       padding: 0;
-      border-radius: var(--radius-xs);
-      font-size: 16px;
+    }
+    .btn-block {
+      width: 100%;
     }
 
-    /* ── 세그먼트 컨트롤 ── */
+    /* ── 세그먼트 컨트롤 (이미지 / 텍스트) ── */
     .segment-control {
-      display: flex;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      padding: 3px;
-      margin-bottom: 16px;
+      display: inline-flex;
+      gap: 2px;
+      padding: 2px;
+      background: var(--canvas);
+      border: 1px solid var(--hairline);
+      border-radius: 9999px;
     }
     .segment-btn {
-      flex: 1;
-      padding: 8px 16px;
+      height: 26px;
+      padding: 0 14px;
       border: none;
-      border-radius: 7px;
+      border-radius: 9999px;
+      background: transparent;
+      color: var(--ink-subtle);
+      font-family: inherit;
       font-size: 13px;
       font-weight: 500;
-      font-family: inherit;
-      background: transparent;
-      color: var(--text-secondary);
       cursor: pointer;
-      transition: all var(--transition);
+      transition: background-color var(--transition), color var(--transition);
     }
+    .segment-btn:hover { color: var(--ink); }
     .segment-btn.active {
-      background: var(--accent);
-      color: #fff;
-      box-shadow: 0 2px 8px var(--accent-glow);
+      background: var(--surface-3);
+      color: var(--ink);
+      box-shadow: inset 0 0 0 1px var(--hairline-strong);
     }
 
     /* ── 드롭존 ── */
     .dropzone {
-      border: 2px dashed var(--border);
-      border-radius: var(--radius-sm);
-      padding: 32px 20px;
-      text-align: center;
-      cursor: pointer;
-      transition: all var(--transition);
       position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 148px;
+      padding: 24px;
       overflow: hidden;
+      text-align: center;
+      background: var(--canvas);
+      border: 1px dashed var(--hairline-strong);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: border-color var(--transition), background-color var(--transition);
     }
     .dropzone:hover, .dropzone.drag-over {
-      border-color: var(--accent);
-      background: rgba(124, 58, 237, 0.05);
+      border-color: var(--primary);
+      background: var(--surface-2);
     }
-    .dropzone.drag-over {
-      box-shadow: inset 0 0 20px var(--accent-glow);
+    .dropzone:has(input:focus-visible) {
+      border-color: var(--primary-focus);
+      box-shadow: 0 0 0 2px var(--focus-ring);
     }
     .dropzone-icon {
-      font-size: 32px;
-      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      margin: 0 auto 10px;
+      background: var(--surface-2);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-md);
+      color: var(--ink-subtle);
     }
     .dropzone-text {
       font-size: 13px;
-      color: var(--text-secondary);
+      color: var(--ink-muted);
     }
     .dropzone-hint {
-      font-size: 11px;
-      color: var(--text-muted);
       margin-top: 4px;
+      font-size: 12px;
+      color: var(--ink-subtle);
     }
     .dropzone input[type="file"] {
       position: absolute;
@@ -457,63 +550,37 @@
       gap: 8px;
     }
     .dropzone-preview img {
-      max-width: 200px;
-      border-radius: 4px;
-      border: 1px solid var(--border);
+      max-width: 220px;
+      max-height: 128px;
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-xs);
     }
     .dropzone-preview .filename {
       font-size: 12px;
-      color: var(--text-secondary);
+      color: var(--ink-subtle);
+      overflow-wrap: anywhere;
     }
     .dropzone.has-file .dropzone-default { display: none; }
     .dropzone.has-file .dropzone-preview { display: flex; }
 
-    /* ── 폼 필드 ── */
-    .form-field {
-      margin-bottom: 14px;
-    }
-    .form-field label {
-      display: block;
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--text-secondary);
-      margin-bottom: 6px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    .form-field input[type="text"], .form-field textarea {
-      width: 100%;
-    }
-    .form-field input[type="number"] {
-      width: 100%;
-      max-width: 180px;
-    }
-    .form-hint {
-      font-size: 12px;
-      line-height: 1.5;
-      color: var(--text-muted);
-      margin-bottom: 14px;
-    }
-
     /* ── 텍스트 프리셋 미리보기 ── */
     .text-preview {
-      width: 100%;
-      max-width: 416px;
-      aspect-ratio: 416 / 240;
       display: flex;
       justify-content: center;
       align-items: center;
+      width: 100%;
+      max-width: 416px;
+      aspect-ratio: 416 / 240;
       overflow: hidden;
-      padding: 12px;
-      background: var(--bg-input);
-      border: 1px dashed var(--border);
-      border-radius: 4px;
+      padding: 16px;
+      background: var(--canvas);
+      border: 1px dashed var(--hairline-strong);
+      border-radius: var(--radius-md);
     }
     .text-preview.has-image {
       padding: 0;
       background: #fff;
-      border: none;
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.1);
+      border: 1px solid var(--hairline-strong);
     }
     .text-preview img {
       width: 100%;
@@ -525,7 +592,7 @@
       font-size: 12px;
       line-height: 1.5;
       text-align: center;
-      color: var(--text-muted);
+      color: var(--ink-subtle);
       overflow-wrap: anywhere;
     }
     .text-preview.error .text-preview-msg {
@@ -533,39 +600,45 @@
     }
 
     /* ── 상태 프리셋 그리드 ── */
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
     .presets-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-      gap: 14px;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 16px;
     }
     .preset-card {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
       overflow: hidden;
-      transition: all var(--transition);
-      animation: fadeInUp 0.3s ease backwards;
+      background: var(--surface-1);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-lg);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+      transition: border-color var(--transition), background-color var(--transition);
+      animation: fadeIn 0.25s ease backwards;
     }
     .preset-card:hover {
-      border-color: rgba(255,255,255,0.15);
-      transform: translateY(-2px);
-      box-shadow: var(--shadow);
+      background: var(--surface-2);
+      border-color: var(--hairline-strong);
     }
     .preset-card.active,
     .preset-card.active:hover {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 1px var(--accent), 0 4px 24px var(--accent-glow);
+      border-color: var(--primary);
+      box-shadow: 0 0 0 1px var(--primary);
     }
     .preset-preview {
       position: relative;
-      width: 100%;
-      aspect-ratio: 416 / 240;
-      background: #fff;
       display: flex;
       justify-content: center;
       align-items: center;
+      width: 100%;
+      aspect-ratio: 416 / 240;
       overflow: hidden;
-      border-bottom: 1px solid var(--border);
+      background: #fff;
+      border-bottom: 1px solid var(--hairline);
     }
     .preset-preview img {
       width: 100%;
@@ -578,335 +651,395 @@
       position: absolute;
       top: 8px;
       left: 8px;
-      padding: 3px 10px;
-      border-radius: 999px;
-      background: var(--accent);
-      color: #fff;
+      align-items: center;
+      gap: 6px;
+      height: 22px;
+      padding: 0 8px;
+      background: rgba(1, 1, 2, 0.85);
+      border-radius: 9999px;
+      color: var(--ink);
       font-size: 11px;
-      font-weight: 600;
-      box-shadow: 0 2px 8px var(--accent-glow);
+      font-weight: 500;
+    }
+    .active-badge::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--success);
     }
     .preset-card.active .active-badge {
-      display: inline-block;
+      display: inline-flex;
     }
     .preset-info {
-      padding: 14px;
+      padding: 12px;
     }
     .preset-name-row {
       display: flex;
       align-items: center;
       gap: 6px;
-      margin-bottom: 12px;
+      min-height: 28px;
+      margin-bottom: 10px;
     }
     .preset-name {
       flex: 1;
       min-width: 0;
-      font-size: 14px;
-      font-weight: 600;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-    }
-    .name-edit-btn {
-      flex: none;
-      width: 28px;
-      height: 28px;
-      padding: 0;
-      border-radius: var(--radius-xs);
-      font-size: 13px;
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: -0.1px;
     }
     .preset-name-row input.rename-input {
       flex: 1;
       min-width: 0;
-      padding: 5px 10px;
+      min-height: 28px;
+      padding: 3px 8px;
       font-size: 14px;
-      font-weight: 600;
+      font-weight: 500;
     }
     .preset-actions {
       display: flex;
-      gap: 6px;
+      align-items: center;
+      gap: 4px;
     }
     .preset-actions .btn:not(.btn-icon) { flex: 1; }
     .preset-actions .btn-icon { flex: none; }
 
     /* ── 빈 상태 ── */
     .empty-state {
-      text-align: center;
       padding: 48px 24px;
-      color: var(--text-muted);
+      text-align: center;
+      border: 1px dashed var(--hairline-strong);
+      border-radius: var(--radius-lg);
+      color: var(--ink-subtle);
     }
-    .empty-state .icon { font-size: 48px; margin-bottom: 12px; opacity: 0.4; }
-    .empty-state p { font-size: 14px; }
+    .empty-state p + p {
+      margin-top: 4px;
+      font-size: 13px;
+      color: var(--ink-subtle);
+    }
+
+    /* ── 단축어 가이드 ── */
+    .guide-intro {
+      margin-bottom: 8px;
+      color: var(--ink-muted);
+    }
+    .guide-intro strong { font-weight: 600; color: var(--ink); }
+    .steps {
+      list-style: none;
+      counter-reset: step;
+    }
+    .steps li {
+      position: relative;
+      padding: 12px 0 12px 40px;
+      counter-increment: step;
+      line-height: 1.6;
+      color: var(--ink-muted);
+    }
+    .steps li + li {
+      border-top: 1px solid var(--hairline);
+    }
+    .steps li::before {
+      content: counter(step);
+      position: absolute;
+      top: 12px;
+      left: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      background: var(--surface-2);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-sm);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-subtle);
+    }
+    .steps strong { font-weight: 500; color: var(--ink); }
+    .guide-url {
+      display: inline-block;
+      max-width: 100%;
+      margin-top: 6px;
+      color: var(--primary-hover);
+      overflow-wrap: anywhere;
+    }
+    .guide-note {
+      margin-top: 12px;
+      padding-top: 16px;
+      border-top: 1px solid var(--hairline);
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--ink-subtle);
+    }
 
     /* ── 토스트 알림 ── */
     .toast-container {
       position: fixed;
-      top: 20px;
-      right: 20px;
-      z-index: 9999;
+      right: 24px;
+      bottom: 24px;
+      z-index: 100;
       display: flex;
       flex-direction: column;
+      align-items: flex-end;
       gap: 8px;
+      pointer-events: none;
     }
     .toast {
-      padding: 12px 20px;
-      border-radius: var(--radius-sm);
-      font-size: 13px;
-      font-weight: 500;
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      box-shadow: var(--shadow);
-      animation: slideIn 0.3s ease;
-      max-width: 360px;
-    }
-    .toast.success {
-      background: rgba(16, 185, 129, 0.9);
-      color: #fff;
-    }
-    .toast.error {
-      background: rgba(239, 68, 68, 0.9);
-      color: #fff;
-    }
-    .toast.info {
-      background: rgba(124, 58, 237, 0.9);
-      color: #fff;
-    }
-    .toast.fade-out {
-      animation: slideOut 0.3s ease forwards;
-    }
-
-    /* ── 단축어 가이드 ── */
-    .guide-url {
-      display: inline-block;
-      max-width: 100%;
-      margin-top: 4px;
-      padding: 4px 8px;
-      border-radius: 4px;
-      background: rgba(255, 255, 255, 0.1);
-      color: var(--accent);
-      font-family: monospace;
-      overflow-wrap: anywhere;
-    }
-
-    /* ── 설정 ── */
-    .settings-toggle {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 10px;
+      max-width: 380px;
+      padding: 10px 14px;
+      background: var(--surface-3);
+      border: 1px solid var(--hairline-strong);
+      border-radius: var(--radius-md);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+      color: var(--ink);
       font-size: 13px;
-      color: var(--text-muted);
-      cursor: pointer;
-      margin-bottom: 12px;
-      transition: color var(--transition);
+      animation: toastIn 0.2s ease;
+      pointer-events: auto;
     }
-    .settings-toggle:hover { color: var(--text-secondary); }
-    .settings-content {
-      display: none;
+    .toast::before {
+      content: '';
+      flex: none;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--primary);
     }
-    .settings-content.open {
-      display: block;
+    .toast.success::before { background: var(--success); }
+    .toast.error::before { background: var(--danger); }
+    .toast.fade-out {
+      animation: toastOut 0.2s ease forwards;
     }
 
     /* ── 로딩 스피너 ── */
     .spinner {
-      width: 16px;
-      height: 16px;
-      border: 2px solid rgba(255,255,255,0.3);
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.35);
       border-top-color: #fff;
       border-radius: 50%;
       animation: spin 0.6s linear infinite;
     }
 
     /* ── 애니메이션 ── */
-    @keyframes fadeInUp {
-      from { opacity: 0; transform: translateY(12px); }
-      to   { opacity: 1; transform: translateY(0); }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: none; }
     }
-    @keyframes slideIn {
-      from { opacity: 0; transform: translateX(60px); }
-      to   { opacity: 1; transform: translateX(0); }
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: none; }
     }
-    @keyframes slideOut {
-      from { opacity: 1; transform: translateX(0); }
-      to   { opacity: 0; transform: translateX(60px); }
+    @keyframes toastOut {
+      from { opacity: 1; transform: none; }
+      to   { opacity: 0; transform: translateY(8px); }
     }
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+    @media (prefers-reduced-motion: reduce) {
+      .preset-card, .toast, .toast.fade-out { animation: none; }
+    }
 
     /* ── 반응형 ── */
+    @media (max-width: 900px) {
+      .layout-top { grid-template-columns: minmax(0, 1fr); }
+    }
     @media (max-width: 640px) {
-      .container { padding: 16px 14px 40px; }
-      .header { flex-direction: column; align-items: flex-start; gap: 12px; }
-      .header-right { justify-content: flex-start; }
-      .presets-grid { grid-template-columns: 1fr; }
-      .input-group { flex-direction: column; }
-      .input-group .btn { width: 100%; }
-      .toast-container { left: 14px; right: 14px; }
+      .topnav-inner { padding: 0 16px; }
+      .container { padding: 28px 16px 64px; }
+      .user-email { display: none; }
+      .card { padding: 20px 16px; }
+      .preview-frame { padding: 12px; }
+      /* iOS 는 16px 보다 작은 입력칸에 포커스하면 화면을 확대한다 */
+      input[type="text"], input[type="number"], textarea,
+      .preset-name-row input.rename-input { font-size: 16px; }
+      .toast-container { left: 16px; right: 16px; bottom: 16px; align-items: stretch; }
       .toast { max-width: none; }
+    }
+    @media (max-width: 420px) {
+      .brand span { display: none; }
+    }
+    @media (pointer: coarse) {
+      .btn-sm { height: 36px; }
+      .btn-icon { width: 36px; }
+      .preset-name-row input.rename-input { min-height: 36px; }
     }
   </style>
 </head>
 <body>
-  <div class="container">
-
-    <!-- ════════════ 헤더 ════════════ -->
-    <header class="header">
-      <div class="header-left">
-        <h1>E-ink Status Board</h1>
-        <p>ESP32 전자잉크 디스플레이 관리자</p>
-      </div>
-      <div class="header-right">
-        <!-- 인증이 켜져 있을 때만 보인다. 로그아웃은 fetch 가 아닌 실제 폼 제출 -->
-        <form class="user-box" id="user-box" method="post" action="/logout" hidden>
-          <span class="user-email" id="user-email"></span>
-          <button type="submit" class="btn btn-ghost btn-sm">로그아웃</button>
-        </form>
-        <div class="status-badge" id="connection-badge">
+  <!-- ════════════ 상단 내비게이션 ════════════ -->
+  <header class="topnav">
+    <div class="topnav-inner">
+      <a class="brand" href="/admin" aria-label="E-ink Status Board">
+        <img src="/favicon.svg" width="20" height="20" alt="">
+        <span>E-ink Status Board</span>
+      </a>
+      <div class="nav-right">
+        <div class="status-badge" id="connection-badge" role="status">
           <span class="status-dot" id="status-dot"></span>
           <span id="connection-text">연결 확인 중...</span>
         </div>
+        <!-- 인증이 켜져 있을 때만 보인다. 로그아웃은 fetch 가 아닌 실제 폼 제출 -->
+        <form class="user-box" id="user-box" method="post" action="/logout" hidden>
+          <span class="user-email" id="user-email"></span>
+          <button type="submit" class="btn btn-secondary btn-sm">로그아웃</button>
+        </form>
       </div>
-    </header>
+    </div>
+  </header>
 
-    <!-- ════════════ 현재 디스플레이 미리보기 ════════════ -->
-    <section class="card" id="preview-card">
-      <div class="card-title"><span class="icon">🖥️</span> 현재 디스플레이</div>
-      <div class="preview-frame">
-        <div class="preview-screen">
-          <img id="current-preview" src="/current-preview.png" alt="현재 E-ink 화면">
+  <main class="container">
+    <div class="page-head">
+      <h1>상태 보드</h1>
+      <p>전자잉크 화면에 띄울 상태를 만들고, 골라서 적용합니다.</p>
+    </div>
+
+    <div class="layout-top">
+      <!-- ════════════ 현재 디스플레이 미리보기 ════════════ -->
+      <section class="card" id="preview-card">
+        <div class="card-head">
+          <h2 class="card-title">
+            <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+            현재 디스플레이
+          </h2>
+          <button type="button" class="btn btn-secondary btn-sm" id="refresh-btn" title="같은 화면을 디바이스에 다시 그리게 합니다 (잔상 제거)">
+            <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>
+            강제 새로고침
+          </button>
         </div>
-      </div>
-      <div class="preview-label" id="current-status-label">표시 중인 내용 없음</div>
-      <div class="preview-actions">
-        <button type="button" class="btn btn-ghost btn-sm" id="refresh-btn" title="같은 화면을 디바이스에 다시 그리게 합니다 (잔상 제거)">🔄 강제 새로고침</button>
-      </div>
-
-      <div class="device-section">
-        <div class="device-heading">디바이스</div>
-        <ul class="device-list" id="device-list">
-          <li class="device-empty">디바이스 정보를 불러오는 중...</li>
-        </ul>
-      </div>
-    </section>
-
-    <!-- ════════════ 새 상태 프리셋 등록 ════════════ -->
-    <section class="card">
-      <div class="card-title"><span class="icon">➕</span> 새 상태 프리셋 등록</div>
-
-      <div class="segment-control" id="mode-control">
-        <button type="button" class="segment-btn active" data-mode="image" aria-pressed="true">🖼️ 이미지</button>
-        <button type="button" class="segment-btn" data-mode="text" aria-pressed="false">🔤 텍스트</button>
-      </div>
-
-      <form id="create-preset-form" novalidate>
-        <!-- 이름 -->
-        <div class="form-field">
-          <label for="preset-name">상태 프리셋 이름</label>
-          <input type="text" id="preset-name" placeholder="예: 회의 중, 자리 비움" maxlength="100" required>
-        </div>
-
-        <!-- 이미지 업로드 -->
-        <div class="form-field" id="image-field">
-          <label>이미지 파일 (필수)</label>
-          <div class="dropzone" id="dropzone">
-            <div class="dropzone-default">
-              <div class="dropzone-icon">📁</div>
-              <div class="dropzone-text">이미지를 드래그하거나 클릭하여 선택</div>
-              <div class="dropzone-hint">권장: 416×240px · PNG, JPG</div>
-            </div>
-            <div class="dropzone-preview">
-              <img id="dropzone-thumb" src="" alt="미리보기">
-              <span class="filename" id="dropzone-filename"></span>
-            </div>
-            <input type="file" id="preset-image" accept="image/*" required>
-          </div>
-        </div>
-
-        <!-- 텍스트 입력 -->
-        <div id="text-fields" hidden>
-          <div class="form-field">
-            <label for="preset-text">표시할 문구 (선택)</label>
-            <textarea id="preset-text" rows="3" maxlength="200" placeholder="비워 두면 위의 이름이 그대로 표시됩니다. 최대 6줄, 200자"></textarea>
-          </div>
-          <div class="form-field">
-            <label for="preset-font-size">최대 글자 크기 (선택, 14–120)</label>
-            <input type="number" id="preset-font-size" min="14" max="120" step="1" placeholder="자동">
-          </div>
-          <div class="form-field">
-            <label>미리보기</label>
-            <div class="text-preview" id="text-preview">
-              <img id="text-preview-img" alt="텍스트 프리셋 미리보기" hidden>
-              <p class="text-preview-msg" id="text-preview-msg" aria-live="polite"></p>
+        <div class="preview-frame">
+          <div class="preview-bezel">
+            <div class="preview-screen">
+              <img id="current-preview" src="/current-preview.png" alt="현재 E-ink 화면">
             </div>
           </div>
-          <p class="form-hint">이모지는 텍스트 프리셋에서 표시되지 않고 제거됩니다. 이모지가 필요하면 이미지 프리셋을 사용하세요.</p>
+        </div>
+        <div class="preview-label" id="current-status-label">표시 중인 내용 없음</div>
+
+        <div class="device-section">
+          <h3 class="subhead">디바이스</h3>
+          <ul class="device-list" id="device-list">
+            <li class="device-empty">디바이스 정보를 불러오는 중...</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ════════════ 새 상태 프리셋 등록 ════════════ -->
+      <section class="card">
+        <div class="card-head">
+          <h2 class="card-title">
+            <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            새 상태 프리셋
+          </h2>
+          <div class="segment-control" id="mode-control" role="group" aria-label="프리셋 종류">
+            <button type="button" class="segment-btn active" data-mode="image" aria-pressed="true">이미지</button>
+            <button type="button" class="segment-btn" data-mode="text" aria-pressed="false">텍스트</button>
+          </div>
         </div>
 
-        <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 4px;" id="create-btn">
-          상태 프리셋 등록
-        </button>
-      </form>
-    </section>
+        <form id="create-preset-form" novalidate>
+          <!-- 이름 -->
+          <div class="form-field">
+            <label for="preset-name">상태 프리셋 이름</label>
+            <input type="text" id="preset-name" placeholder="예: 회의 중, 자리 비움" maxlength="100" required>
+          </div>
+
+          <!-- 이미지 업로드 -->
+          <div class="form-field" id="image-field">
+            <label for="preset-image">이미지 파일</label>
+            <div class="dropzone" id="dropzone">
+              <div class="dropzone-default">
+                <div class="dropzone-icon">
+                  <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg>
+                </div>
+                <div class="dropzone-text">이미지를 드래그하거나 클릭하여 선택</div>
+                <div class="dropzone-hint">권장 416×240px · PNG, JPG</div>
+              </div>
+              <div class="dropzone-preview">
+                <img id="dropzone-thumb" src="" alt="미리보기">
+                <span class="filename" id="dropzone-filename"></span>
+              </div>
+              <input type="file" id="preset-image" accept="image/*" required>
+            </div>
+          </div>
+
+          <!-- 텍스트 입력 -->
+          <div id="text-fields" hidden>
+            <div class="form-field">
+              <label for="preset-text">표시할 문구 <span class="optional">(선택)</span></label>
+              <textarea id="preset-text" rows="3" maxlength="200" placeholder="비워 두면 위의 이름이 그대로 표시됩니다. 최대 6줄, 200자"></textarea>
+            </div>
+            <div class="form-field">
+              <label for="preset-font-size">최대 글자 크기 <span class="optional">(선택, 14–120)</span></label>
+              <input type="number" id="preset-font-size" min="14" max="120" step="1" placeholder="자동">
+            </div>
+            <div class="form-field">
+              <span class="field-label" id="text-preview-label">미리보기</span>
+              <div class="text-preview" id="text-preview" role="group" aria-labelledby="text-preview-label">
+                <img id="text-preview-img" alt="텍스트 프리셋 미리보기" hidden>
+                <p class="text-preview-msg" id="text-preview-msg" aria-live="polite"></p>
+              </div>
+            </div>
+            <p class="form-hint">이모지는 텍스트 프리셋에서 표시되지 않고 제거됩니다. 이모지가 필요하면 이미지 프리셋을 사용하세요.</p>
+          </div>
+
+          <button type="submit" class="btn btn-primary btn-lg btn-block" id="create-btn">상태 프리셋 등록</button>
+        </form>
+      </section>
+    </div>
 
     <!-- ════════════ 등록된 상태 프리셋 목록 ════════════ -->
-    <section class="card">
-      <div class="card-title"><span class="icon">📌</span> 등록된 상태 프리셋</div>
+    <section class="section">
+      <div class="section-head">
+        <h2 class="card-title">
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          등록된 상태 프리셋
+          <span class="count" id="presets-count" hidden></span>
+        </h2>
+      </div>
       <div id="presets-container">
         <div class="empty-state" id="presets-empty">
-          <div class="icon">📭</div>
           <p>아직 등록된 상태 프리셋이 없습니다.</p>
+          <p>위에서 이미지나 텍스트로 첫 프리셋을 만들어 보세요.</p>
         </div>
       </div>
     </section>
 
     <!-- ════════════ Apple 단축어 연동 가이드 ════════════ -->
     <section class="card">
-      <div class="card-title"><span class="icon">🍎</span> 제어 센터용 "단축어" 만드는 법 (초간단/오류없음)</div>
-      <div style="font-size: 13px; color: var(--text-muted); line-height: 1.6;">
-        <p style="margin-bottom: 12px; color: var(--text-primary);">단축어 앱에서 <strong>"E-ink 갱신"</strong>이라는 단축어를 하나만 직접 만들어두면, 제어 센터에서 클릭 한 번에 모든 잉크 화면을 고를 수 있습니다!</p>
-        <ol style="padding-left: 20px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 8px;">
-          <li>단축어 앱을 열고 새 단축어를 만듭니다.</li>
-          <li><strong>URL</strong> 동작을 추가하고 아래 주소를 넣습니다.<br>
-            <code class="guide-url" id="guide-url1">https://&lt;도메인&gt;/api/shortcuts/names</code>
-          </li>
-          <li><strong>URL의 콘텐츠 가져오기</strong> 동작을 이어서 추가하고, 화살표(더 보기)를 눌러 <strong>헤더</strong>에서 <strong>새로운 헤더 추가</strong>를 누릅니다. <strong>키(Key)</strong>에는 <code>X-API-Key</code>를 입력하고, <strong>텍스트(Text)</strong>에는 서버 <code>.env</code> 파일의 <code>API_KEY</code> 값을 붙여넣습니다.</li>
-          <li><strong>텍스트 분리</strong> 동작을 이어서 추가합니다. (기준을 <strong>새로운 줄</strong>로 설정하세요)</li>
-          <li><strong>목록에서 선택</strong> 동작을 이어서 추가합니다. (방금 분리된 텍스트 목록이 깔끔하게 뜹니다)</li>
-          <li><strong>URL</strong> 동작을 하나 더 추가하고 아래 주소를 넣습니다.<br>
-            <code class="guide-url" id="guide-url2">https://&lt;도메인&gt;/api/shortcuts/activate</code>
-          </li>
-          <li><strong>URL의 콘텐츠 가져오기</strong> 동작을 마지막으로 추가하고, 화살표(더 보기)를 눌러 방법을 <strong>POST</strong>로 바꿉니다. 3번과 같이 <code>X-API-Key</code> 헤더를 추가하고 같은 <code>API_KEY</code> 값을 넣습니다.</li>
-          <li>바로 아래 <strong>요청 본문 (Request Body)</strong>을 <strong>JSON</strong>으로 설정하고, <strong>새로운 필드 추가 (텍스트)</strong>를 눌러 <strong>키(Key)</strong>에는 <code>name</code>을 입력하고, <strong>텍스트(Text)</strong>에는 <strong>'선택한 항목'</strong> 변수를 넣습니다.</li>
-        </ol>
-        <p style="margin-bottom: 12px;"><code>API_KEY</code>는 서버 <code>.env</code> 파일에 설정한 값입니다. 보안을 위해 이 페이지에서는 보여주지 않으며, 단축어용 주소(<code>/api/shortcuts/*</code>)에서만 쓸 수 있습니다.</p>
-        <p style="color: var(--success);">이제 이모지가 들어간 이름도, 여러 개의 프리셋도 100% 오류 없이 완벽하게 작동합니다!</p>
+      <div class="card-head">
+        <h2 class="card-title">
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg>
+          Apple 단축어 연동
+        </h2>
       </div>
+      <p class="guide-intro">단축어 앱에 <strong>"E-ink 갱신"</strong> 단축어 하나만 만들어 두면, 제어 센터에서 탭 한 번으로 등록된 프리셋을 골라 화면을 바꿀 수 있습니다.</p>
+      <ol class="steps">
+        <li>단축어 앱을 열고 새 단축어를 만듭니다.</li>
+        <li><strong>URL</strong> 동작을 추가하고 아래 주소를 넣습니다.<br>
+          <code class="guide-url" id="guide-url1">https://&lt;도메인&gt;/api/shortcuts/names</code>
+        </li>
+        <li><strong>URL의 콘텐츠 가져오기</strong> 동작을 이어서 추가하고, 화살표(더 보기)를 눌러 <strong>헤더</strong>에서 <strong>새로운 헤더 추가</strong>를 누릅니다. <strong>키(Key)</strong>에는 <code>X-API-Key</code>를 입력하고, <strong>텍스트(Text)</strong>에는 서버 <code>.env</code> 파일의 <code>API_KEY</code> 값을 붙여넣습니다.</li>
+        <li><strong>텍스트 분리</strong> 동작을 이어서 추가합니다. (기준을 <strong>새로운 줄</strong>로 설정하세요)</li>
+        <li><strong>목록에서 선택</strong> 동작을 이어서 추가합니다. (방금 분리된 텍스트 목록이 깔끔하게 뜹니다)</li>
+        <li><strong>URL</strong> 동작을 하나 더 추가하고 아래 주소를 넣습니다.<br>
+          <code class="guide-url" id="guide-url2">https://&lt;도메인&gt;/api/shortcuts/activate</code>
+        </li>
+        <li><strong>URL의 콘텐츠 가져오기</strong> 동작을 마지막으로 추가하고, 화살표(더 보기)를 눌러 방법을 <strong>POST</strong>로 바꿉니다. 3번과 같이 <code>X-API-Key</code> 헤더를 추가하고 같은 <code>API_KEY</code> 값을 넣습니다.</li>
+        <li>바로 아래 <strong>요청 본문 (Request Body)</strong>을 <strong>JSON</strong>으로 설정하고, <strong>새로운 필드 추가 (텍스트)</strong>를 눌러 <strong>키(Key)</strong>에는 <code>name</code>을 입력하고, <strong>텍스트(Text)</strong>에는 <strong>'선택한 항목'</strong> 변수를 넣습니다.</li>
+      </ol>
+      <p class="guide-note"><code>API_KEY</code>는 서버 <code>.env</code> 파일에 설정한 값입니다. 보안을 위해 이 페이지에서는 보여주지 않으며, 단축어용 주소(<code>/api/shortcuts/*</code>)에서만 쓸 수 있습니다. 이모지가 들어간 프리셋 이름도 그대로 동작합니다.</p>
     </section>
-
-    <!-- ════════════ 설정 ════════════ -->
-    <section class="card">
-      <div class="settings-toggle" onclick="toggleSettings()">
-        <span>⚙️</span> 서버 설정 <span id="settings-arrow">▸</span>
-      </div>
-      <div class="settings-content" id="settings-content">
-        <div class="form-field">
-          <label for="server-url">서버 외부 URL (단축어 가이드 주소 채우기용)</label>
-          <div class="input-group">
-            <input type="text" id="server-url" placeholder="https://&lt;도메인&gt;.duckdns.org">
-            <button type="button" class="btn btn-ghost" onclick="saveServerUrl()">저장</button>
-          </div>
-        </div>
-        <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
-          위 단축어 가이드의 주소에 반영됩니다. iPhone에서 접근 가능한 IP 또는 도메인을 입력하세요. (이 브라우저에만 저장됩니다)
-        </div>
-      </div>
-    </section>
-
-  </div>
+  </main>
 
   <!-- 토스트 컨테이너 -->
-  <div class="toast-container" id="toast-container"></div>
+  <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
   <script>
     // ══════════════════════════════════════════
@@ -919,26 +1052,6 @@
     let deviceSignature = null;       // 마지막으로 그린 디바이스 목록의 지문
     let selectedImageFile = null;
     let createMode = 'image';         // 'image' | 'text'
-    /**
-     * 단축어 가이드에 보여줄 주소로 쓸 수 있는지 검사한다.
-     * 단축어는 X-API-Key 를 실어 보내므로 평문 http 주소를 안내하면 키가 그대로 노출된다.
-     * https 만 허용하고, 로컬 개발 주소(localhost / 127.0.0.1)만 예외로 둔다.
-     */
-    function isSafeServerUrl(url) {
-      try {
-        const u = new URL(url);
-        return u.protocol === 'https:' ||
-          (u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1'));
-      } catch { return false; }
-    }
-
-    function loadServerUrl() {
-      let saved = null;
-      try { saved = localStorage.getItem('eink_server_url'); } catch { /* 저장소 접근 불가 */ }
-      return saved && isSafeServerUrl(saved) ? saved : window.location.origin;
-    }
-
-    let serverUrl = loadServerUrl();
 
     // 텍스트 프리셋 미리보기 상태
     let previewTimer = null;
@@ -952,8 +1065,6 @@
     // ══════════════════════════════════════════
 
     document.addEventListener('DOMContentLoaded', () => {
-      // 서버 URL 필드 초기화 및 가이드 업데이트
-      document.getElementById('server-url').value = serverUrl;
       updateGuideUrls();
 
       // 데이터 로드
@@ -1093,15 +1204,10 @@
     // ══════════════════════════════════════════
 
     function renderConnection(connectedClients) {
-      const dot = document.getElementById('status-dot');
       const text = document.getElementById('connection-text');
-      if (connectedClients > 0) {
-        dot.classList.add('connected');
-        text.textContent = `${connectedClients}개 디바이스 연결`;
-      } else {
-        dot.classList.remove('connected');
-        text.textContent = '연결된 디바이스 없음';
-      }
+      const message = connectedClients > 0 ? `${connectedClients}개 디바이스 연결` : '연결된 디바이스 없음';
+      document.getElementById('status-dot').classList.toggle('connected', connectedClients > 0);
+      if (text.textContent !== message) text.textContent = message;
     }
 
     /** 인증이 켜져 있을 때만 로그인 계정과 로그아웃 버튼을 보여준다 */
@@ -1133,10 +1239,10 @@
         if (result.deferred) {
           showToast('새로고침 예약됨 — 잠시 후 반영됩니다', 'info');
         } else {
-          showToast(`🔄 강제 새로고침 전송 (${result.clients_notified}개 디바이스)`, 'success');
+          showToast(`강제 새로고침 전송 (${result.clients_notified}개 디바이스)`, 'success');
         }
       } catch (err) {
-        if (!(err instanceof AuthRedirect)) showToast(`❌ ${err.message}`, 'error');
+        if (!(err instanceof AuthRedirect)) showToast(`${err.message}`, 'error');
       } finally {
         btn.disabled = false;
       }
@@ -1365,11 +1471,11 @@
       }
 
       btn.disabled = true;
-      btn.innerHTML = '<div class="spinner"></div> 등록 중...';
+      btn.innerHTML = '<span class="spinner"></span> 등록 중...';
 
       try {
         await submit();
-        showToast(`📌 "${name}" 상태 프리셋이 등록되었습니다.`, 'success');
+        showToast(`"${name}" 상태 프리셋이 등록되었습니다.`, 'success');
         // 폼 리셋
         nameEl.value = '';
         document.getElementById('preset-text').value = '';
@@ -1379,7 +1485,7 @@
         if (createMode === 'text') updateTextPreview();
         fetchPresets();
       } catch (err) {
-        if (!(err instanceof AuthRedirect)) showToast(`❌ ${err.message}`, 'error');
+        if (!(err instanceof AuthRedirect)) showToast(`${err.message}`, 'error');
       } finally {
         btn.disabled = false;
         btn.textContent = '상태 프리셋 등록';
@@ -1390,16 +1496,27 @@
     //  상태 프리셋 렌더링
     // ══════════════════════════════════════════
 
+    /** 프리셋 카드 버튼의 선 아이콘 (고정 문자열 — 사용자 값이 섞이지 않는다) */
+    const ICONS = Object.fromEntries(Object.entries({
+      rename: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+      left: '<path d="m15 18-6-6 6-6"/>',
+      right: '<path d="m9 18 6-6-6-6"/>',
+      trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+    }).map(([name, paths]) => [name, `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`]));
+
+    /** 프리셋이 없을 때의 안내 — 그리드를 그리면 문서에서 떨어져 나가므로 처음에 잡아 둔다 */
+    const presetsEmpty = document.getElementById('presets-empty');
+
     /** 상태 프리셋 목록을 카드 그리드로 렌더링한다 */
     function renderPresets(list) {
       presets = list;
       const container = document.getElementById('presets-container');
-      const empty = document.getElementById('presets-empty');
+      const count = document.getElementById('presets-count');
+      count.textContent = String(presets.length);
+      count.hidden = presets.length === 0;
 
       if (presets.length === 0) {
-        container.innerHTML = '';
-        container.appendChild(empty);
-        empty.style.display = '';
+        container.replaceChildren(presetsEmpty);
         return;
       }
 
@@ -1413,17 +1530,13 @@
             <div class="preset-info">
               <div class="preset-name-row">
                 <div class="preset-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</div>
-                <button class="btn btn-ghost name-edit-btn" data-action="rename" title="이름 변경" aria-label="이름 변경">✎</button>
+                <button class="btn btn-ghost btn-sm btn-icon" data-action="rename" title="이름 변경" aria-label="이름 변경">${ICONS.rename}</button>
               </div>
               <div class="preset-actions">
-                <button class="btn btn-ghost btn-sm btn-icon" data-action="move-left" title="앞으로 이동" aria-label="앞으로 이동">◀</button>
-                <button class="btn btn-ghost btn-sm btn-icon" data-action="move-right" title="뒤로 이동" aria-label="뒤로 이동">▶</button>
-                <button class="btn btn-success btn-sm" data-action="activate" title="디스플레이에 적용">
-                  적용
-                </button>
-                <button class="btn btn-danger btn-sm btn-icon" data-action="delete" title="삭제" aria-label="삭제">
-                  🗑
-                </button>
+                <button class="btn btn-ghost btn-sm btn-icon" data-action="move-left" title="앞으로 이동" aria-label="앞으로 이동">${ICONS.left}</button>
+                <button class="btn btn-ghost btn-sm btn-icon" data-action="move-right" title="뒤로 이동" aria-label="뒤로 이동">${ICONS.right}</button>
+                <button class="btn btn-secondary btn-sm" data-action="activate" title="디스플레이에 적용">적용</button>
+                <button class="btn btn-ghost btn-danger btn-sm btn-icon" data-action="delete" title="삭제" aria-label="삭제">${ICONS.trash}</button>
               </div>
             </div>
           </div>
@@ -1443,7 +1556,7 @@
       }
     }
 
-    /** 첫 카드는 ◀, 마지막 카드는 ▶ 를 비활성화한다 */
+    /** 첫 카드는 '앞으로', 마지막 카드는 '뒤로' 이동 버튼을 비활성화한다 */
     function updateMoveButtons() {
       const cards = document.querySelectorAll('.preset-card');
       cards.forEach((card, i) => {
@@ -1479,11 +1592,11 @@
         } else if (result.deferred) {
           showToast(`"${preset.name}" 적용 예약 — 잠시 후 화면에 반영됩니다`, 'info');
         } else {
-          showToast(`✅ "${preset.name}" 적용 완료 (${result.clients_notified}개 디바이스)`, 'success');
+          showToast(`"${preset.name}" 적용 완료 (${result.clients_notified}개 디바이스)`, 'success');
         }
         fetchStatus();
       } catch (e) {
-        if (!(e instanceof AuthRedirect)) showToast(`❌ 적용 실패: ${e.message}`, 'error');
+        if (!(e instanceof AuthRedirect)) showToast(`적용 실패: ${e.message}`, 'error');
       } finally {
         btn.disabled = false;
       }
@@ -1493,11 +1606,11 @@
       if (!confirm(`"${preset.name}" 상태 프리셋을 삭제하시겠습니까?`)) return;
       try {
         await deletePreset(preset.id);
-        showToast(`🗑️ "${preset.name}" 상태 프리셋이 삭제되었습니다.`, 'info');
+        showToast(`"${preset.name}" 상태 프리셋이 삭제되었습니다.`, 'info');
         fetchPresets();
         fetchStatus();
       } catch (e) {
-        if (!(e instanceof AuthRedirect)) showToast(`❌ 삭제 실패: ${e.message}`, 'error');
+        if (!(e instanceof AuthRedirect)) showToast(`삭제 실패: ${e.message}`, 'error');
       }
     }
 
@@ -1548,7 +1661,7 @@
         if (name === preset.name) { finish(); return; }
         if (!name) {
           finish();
-          showToast('❌ 프리셋 이름을 입력하세요.', 'error');
+          showToast('프리셋 이름을 입력하세요.', 'error');
           return;
         }
 
@@ -1557,12 +1670,12 @@
           const res = await apiFetch(`/api/presets/${encodeURIComponent(preset.id)}`, jsonOptions('PATCH', { name }));
           if (!res.ok) throw new Error(await errorDetail(res, '이름 변경 실패'));
           const updated = await res.json();
-          showToast(`✏️ 이름 변경: "${preset.name}" → "${updated.name}"`, 'success');
+          showToast(`이름 변경: "${preset.name}" → "${updated.name}"`, 'success');
           preset.name = updated.name;
           setCardName(card, updated.name);
           fetchStatus();
         } catch (err) {
-          if (!(err instanceof AuthRedirect)) showToast(`❌ ${err.message}`, 'error');
+          if (!(err instanceof AuthRedirect)) showToast(`${err.message}`, 'error');
         } finally {
           finish();
         }
@@ -1596,7 +1709,7 @@
       try {
         const res = await apiFetch('/api/presets/order', jsonOptions('PUT', { ids: next.map(p => p.id) }));
         if (!res.ok) {
-          showToast(`❌ ${await errorDetail(res, '순서 변경 실패')}`, 'error');
+          showToast(`${await errorDetail(res, '순서 변경 실패')}`, 'error');
           if (res.status === 409) fetchPresets();   // 다른 곳에서 목록이 바뀌었다 — 최신 목록으로 맞춘다
           return;
         }
@@ -1607,7 +1720,7 @@
         // 노드를 옮기면 포커스가 사라지므로 키보드로 연속 이동할 수 있게 되돌린다
         if (!btn.disabled) btn.focus();
       } catch (err) {
-        if (!(err instanceof AuthRedirect)) showToast(`❌ ${err.message}`, 'error');
+        if (!(err instanceof AuthRedirect)) showToast(`${err.message}`, 'error');
       } finally {
         _reorderInFlight = false;
       }
@@ -1707,36 +1820,11 @@
       ));
     }
 
-    /** 설정 토글 */
-    function toggleSettings() {
-      const content = document.getElementById('settings-content');
-      const arrow = document.getElementById('settings-arrow');
-      content.classList.toggle('open');
-      arrow.textContent = content.classList.contains('open') ? '▾' : '▸';
-    }
-
-    /** 가이드 URL 업데이트 */
+    /** 단축어 가이드의 주소를 지금 접속한 주소 기준으로 채운다 */
     function updateGuideUrls() {
-      const base = serverUrl.replace(/\/$/, '');
-      const el1 = document.getElementById('guide-url1');
-      const el2 = document.getElementById('guide-url2');
-      if(el1) el1.textContent = `${base}/api/shortcuts/names`;
-      if(el2) el2.textContent = `${base}/api/shortcuts/activate`;
-    }
-
-
-    /** 서버 URL 저장 */
-    function saveServerUrl() {
-      const url = document.getElementById('server-url').value.trim();
-      if (!url) { showToast('URL을 입력하세요.', 'error'); return; }
-      if (!isSafeServerUrl(url)) {
-        showToast('https:// 로 시작하는 주소를 입력하세요. (http 는 API 키가 평문으로 전송됩니다)', 'error');
-        return;
-      }
-      serverUrl = url;
-      localStorage.setItem('eink_server_url', url);
-      updateGuideUrls();
-      showToast('✅ 서버 URL이 저장되었습니다.', 'success');
+      const base = window.location.origin;
+      document.getElementById('guide-url1').textContent = `${base}/api/shortcuts/names`;
+      document.getElementById('guide-url2').textContent = `${base}/api/shortcuts/activate`;
     }
   </script>
 </body>
