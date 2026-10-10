@@ -55,11 +55,11 @@ import tempfile
 import time
 import uuid as uuid_lib
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from dotenv import load_dotenv
@@ -195,6 +195,16 @@ MAX_DEVICE_UPTIME_S = 2**32                                    # 약 136년 — 
 
 # 프리셋 ID 형식 (generate_preset_id 가 만드는 8자리 hex). 파일 경로에 쓰이므로 이 형식만 받는다.
 PRESET_ID_RE = re.compile(r"[0-9a-f]{8}")
+# 일정 제안 링크의 종료 시각 (Power Automate 의 endWithTimeZone / end / convertToUtc 결과).
+# Python 3.10 의 fromisoformat 은 7자리 소수 초와 Z 를 못 읽어 직접 해석한다. 소수 초는 버린다
+UNTIL_RE = re.compile(
+    r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,7})?)?(Z|[+-]\d{2}:\d{2})?"
+)
+MAX_UNTIL_LENGTH = 64
+MAX_REVERT_AHEAD = 24 * 3600          # 복귀 예약은 24시간 안쪽 일정만
+# 로그인 후 돌아갈 수 있는 주소 — 허용 목록 (open redirect 방지)
+NEXT_RE = re.compile(r"/(?:admin|suggest)(?:\?[^#\\\s]*)?")
+MAX_NEXT_LENGTH = 1024                # 세션 쿠키(4KB)에 들어가므로 짧게
 DEVICE_FIELDS = ("id", "ip", "fw", "rssi", "uptime_s", "reset", "connected_at", "last_seen")
 
 # ──────────────────────────────────────────────
@@ -378,6 +388,35 @@ _persist_task: Optional[asyncio.Task] = None
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def parse_until(value) -> Optional[datetime]:
+    """일정 종료 시각 문자열을 aware UTC datetime 으로. 형식이 틀리면 None. 오프셋이 없으면 UTC 로 본다."""
+    if not isinstance(value, str) or len(value) > MAX_UNTIL_LENGTH:
+        return None
+    m = UNTIL_RE.fullmatch(value.strip())
+    if not m:
+        return None
+    year, month, day, hour, minute, second, offset = m.groups()
+    try:
+        moment = datetime(int(year), int(month), int(day), int(hour), int(minute), int(second or 0),
+                          tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    if offset and offset != "Z":
+        hours, minutes = int(offset[1:3]), int(offset[4:6])
+        if hours > 23 or minutes > 59:
+            return None
+        delta = timedelta(hours=hours, minutes=minutes)
+        moment = moment - delta if offset[0] == "+" else moment + delta
+    return moment
+
+
+def _safe_next(value) -> Optional[str]:
+    """로그인 후 돌아갈 주소. 허용 목록(/admin, /suggest…)에 맞으면 그대로, 아니면 None."""
+    if isinstance(value, str) and len(value) <= MAX_NEXT_LENGTH and NEXT_RE.fullmatch(value):
+        return value
+    return None
 
 
 # ──────────────────────────────────────────────
