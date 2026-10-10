@@ -104,6 +104,6 @@ concat('https://<도메인>/suggest?preset=', encodeUriComponent(outputs('Preset
 | 6번 동작 실패 `BotNotInConversationRoster` 등 | Flow bot(Workflows 앱) 차단 — [메일로 받기](#teams-가-막혀-있을-때--메일로-받기) |
 | 링크를 열면 로그인 화면 | Teams 가 링크를 앱 안의 브라우저로 열면 Chrome 의 로그인 상태를 쓰지 못합니다. 한 번 로그인하면 원래 제안 화면으로 돌아오고, 그 브라우저에는 30일간 유지됩니다. 로그인이 막히면 "브라우저에서 열기" 로 Chrome 에서 여세요 |
 | "프리셋이 없습니다" | ② 의 이름과 Admin 의 프리셋 이름이 다름 (띄어쓰기 포함) |
-| 복귀 시각이 9시간 어긋남 | 링크에 `end`/`start` 같은 오프셋 없는 값을 넣었거나 KST 를 UTC 로 착각 — ③ 처럼 `endWithTimeZone` 을 쓰세요 |
+| 복귀 시각이 9시간 어긋남 | 링크의 `until` 에 한국 시간을 오프셋 없이 넣었음 — 서버는 오프셋이 없으면 UTC 로 읽습니다. 흐름 A 는 ③ 처럼 `endWithTimeZone`(트리거의 `end` 도 UTC 라 괜찮음), 흐름 B 는 `convertToUtc(...)` 결과를 쓰세요 |
 | "이미 끝난 일정입니다" | 일정 종료 뒤에 링크를 열었음 — 의도된 동작 |
 | 일정 종료 후 돌아오지 않음 | 그 사이 직접 다른 상태로 바꿨거나, Admin 에서 [취소] 했거나, 되돌릴 프리셋을 지웠음 |

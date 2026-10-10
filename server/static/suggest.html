@@ -154,6 +154,7 @@
     let presets = [];
     let status = null;
     let target = null;          // 지금 묻고 있는 프리셋
+    let extending = false;      // 같은 프리셋의 복귀 시각만 늦추는 중 (연속 일정)
 
     /** 서버와 같은 규칙: 7자리 소수 초는 버리고, 오프셋이 없으면 UTC */
     function parseUntil(s) {
@@ -203,7 +204,10 @@
       const baseName = pending ? pending.revert_to_name : status.text;
       if (!baseId || !baseName) return '돌아갈 이전 상태가 없어 그대로 유지됩니다.';
       if (baseId === preset.id) return '';
-      return `${timeFmt.format(until)}(일정 종료)에 지금의 '${baseName}'${ro(baseName)} 돌아갑니다.`;
+      // 연속 일정이면 돌아갈 곳은 지금 화면이 아니라 처음 상태다
+      return pending
+        ? `${timeFmt.format(until)}(일정 종료)에 '${baseName}'${ro(baseName)} 돌아갑니다.`
+        : `${timeFmt.format(until)}(일정 종료)에 지금의 '${baseName}'${ro(baseName)} 돌아갑니다.`;
     }
 
     function renderChips(excludeId, title) {
@@ -222,6 +226,8 @@
 
     function renderQuestion(preset, eyebrow) {
       target = preset;
+      extending = false;
+      document.getElementById('apply-btn').textContent = '바꾸기';
       setText('eyebrow', eyebrow || '상태 제안');
       setText('title', `'${preset.name}'${ro(preset.name)} 바꾸시겠어요?`);
       setText('sub', revertSentence(preset));
@@ -233,6 +239,17 @@
       show('ask-actions', true);
       show('done-actions', false);
       renderChips(preset.id, '다른 프리셋으로');
+    }
+
+    /** 같은 프리셋이 제안으로 이미 표시 중일 때 — 이번 일정이 끝날 때까지 복귀를 늦춘다 */
+    function renderExtend(preset, pending) {
+      renderQuestion(preset);
+      extending = true;
+      const name = pending.revert_to_name || '이전 상태';
+      setText('title', `'${preset.name}' 상태를 계속 유지할까요?`);
+      setText('sub', `지금은 ${timeFmt.format(new Date(pending.at))}에 '${name}'${ro(name)} 돌아가도록 예약돼 있습니다. `
+        + `이번 일정이 끝나는 ${timeFmt.format(until)}까지 유지합니다.`);
+      document.getElementById('apply-btn').textContent = '종료 시각 연장';
     }
 
     function renderMessage(eyebrow, title, sub) {
@@ -251,7 +268,8 @@
         const name = result.revert.revert_to_name || '이전 상태';
         parts.push(`${timeFmt.format(new Date(result.revert.at))}에 '${name}'${ro(name)} 돌아갑니다.`);
       }
-      renderMessage('적용됨', `'${preset.name}'${ro(preset.name)} 바꿨습니다`, parts.join(' '));
+      const title = extending ? `'${preset.name}' 상태를 유지합니다` : `'${preset.name}'${ro(preset.name)} 바꿨습니다`;
+      renderMessage('적용됨', title, parts.join(' '));
       show('preview', true);
       show('others', false);
     }
@@ -264,7 +282,7 @@
         const res = await fetch('/api/suggestions/apply', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ preset_id: target.id, until: untilRaw || null }),
+          body: JSON.stringify({ preset_id: target.id, until: until ? untilRaw : null }),
         });
         if (res.status === 401) { toLogin(); return; }
         let body = {};
@@ -308,6 +326,12 @@
         return;
       }
       if (found.id === status.active_preset_id) {
+        // 연속 일정: 같은 프리셋이 제안으로 표시 중이고 이번 일정이 더 늦게 끝나면 복귀 시각만 늦춘다
+        const pending = status.pending_revert;
+        if (until && pending && until > new Date(pending.at)) {
+          renderExtend(found, pending);
+          return;
+        }
         renderMessage('상태 제안', `이미 '${found.name}' 상태입니다`, '바꿀 필요가 없습니다.');
         renderChips(found.id, '다른 프리셋으로');
         return;
