@@ -16,8 +16,9 @@
    ESP32     — X-Device-Token 헤더 (DEVICE_TOKEN), /ws 에만 유효
 
  API:
+   GET    /                                  — 로그인 전 메인 페이지 (무인증, 로그인 상태면 /admin)
    GET    /healthz                           — 헬스 체크 (무인증)
-   GET    /login                             — Google 로그인 시작
+   GET    /login                             — Google 로그인 시작 (메인 페이지의 버튼)
    GET    /auth/callback                     — Google OAuth 콜백
    POST   /logout                            — 로그아웃
    GET    /admin                             — 관리자 페이지
@@ -276,11 +277,24 @@ def _validate_auth_config() -> None:
         if value and len(value) < MIN_SECRET_LENGTH:
             raise RuntimeError(f"{name} 은 {MIN_SECRET_LENGTH}자 이상이어야 합니다.")
 
+    # 비밀 값은 생성 명령의 "결과"여야 한다. 공백·따옴표·$( 가 들어 있으면 명령 문자열을
+    # 그대로 붙여 넣은 것이므로(공개된 값), 그 상태로 서버가 뜨지 않게 한다.
+    secrets_in_use = {"SESSION_SECRET": SESSION_SECRET, "API_KEY": API_KEY, "DEVICE_TOKEN": DEVICE_TOKEN}
+    for name, value in secrets_in_use.items():
+        if value and not re.fullmatch(r"[A-Za-z0-9._~+/=\-]+", value):
+            raise RuntimeError(
+                f"{name} 에 허용되지 않는 문자(공백·따옴표·괄호 등)가 있습니다. "
+                "생성 명령을 실행한 결과값만 넣으세요: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\""
+            )
+    distinct = [v for v in secrets_in_use.values() if v]
+    if len(distinct) != len(set(distinct)):
+        raise RuntimeError("SESSION_SECRET / API_KEY / DEVICE_TOKEN 은 서로 다른 값이어야 합니다.")
+
 
 _validate_auth_config()
 
-# 세션 없이 접근 가능한 경로
-PUBLIC_PATHS = frozenset({"/healthz", "/login", "/auth/callback", "/logout"})
+# 세션 없이 접근 가능한 경로 ("/" 는 로그인 전 메인 페이지)
+PUBLIC_PATHS = frozenset({"/", "/healthz", "/login", "/auth/callback", "/logout"})
 # API 키로도 접근 가능한 경로 (그 외 경로는 Google 로그인 세션만 통한다)
 API_KEY_PATHS = frozenset({"/api/shortcuts/names", "/api/shortcuts/activate"})
 
@@ -1116,8 +1130,8 @@ def _device_authorized(websocket: WebSocket) -> bool:
     return _secret_matches(websocket.headers.get("x-device-token", ""), DEVICE_TOKEN)
 
 
-def _message_page(title: str, message: str, status_code: int, link_label: str = "Google 계정으로 로그인") -> HTMLResponse:
-    """로그인 실패·로그아웃 안내용 최소 HTML 페이지."""
+def _message_page(title: str, message: str, status_code: int, link_label: str = "로그인 페이지로") -> HTMLResponse:
+    """로그인 실패·로그아웃 안내용 최소 HTML 페이지. 링크는 로그인 전 메인 페이지(/)로 보낸다."""
     return HTMLResponse(
         status_code=status_code,
         content=f"""<!DOCTYPE html>
@@ -1134,7 +1148,7 @@ def _message_page(title: str, message: str, status_code: int, link_label: str = 
        background:linear-gradient(135deg,#7c3aed,#4f46e5); color:#fff; font-size:14px; font-weight:500; }}
 </style></head>
 <body><main><h1>{html.escape(title)}</h1><p>{html.escape(message)}</p>
-<a href="/login">{html.escape(link_label)}</a></main></body></html>""",
+<a href="/">{html.escape(link_label)}</a></main></body></html>""",
     )
 
 
@@ -1159,7 +1173,7 @@ async def auth_gate(request: Request, call_next):
         )
         if not authorized:
             if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
-                return RedirectResponse("/login", status_code=303)
+                return RedirectResponse("/", status_code=303)   # 브라우저는 로그인 전 메인 페이지로
             return JSONResponse(status_code=401, content={"detail": "로그인이 필요합니다."})
 
     # 본문 크기 — 길이를 미리 알 수 없는 chunked 본문은 받지 않고, Content-Length 로 한도를 검사한다.
@@ -1200,7 +1214,10 @@ async def healthz():
 
 @app.get("/login")
 async def login(request: Request):
-    """Google 로그인 화면으로 보낸다."""
+    """
+    Google 로그인 화면으로 보낸다. 메인 페이지(/)의 "Google 계정으로 로그인" 버튼이 여기로 온다.
+    (Google 이 돌아오는 주소는 /auth/callback 으로 고정 — 이 경로는 리디렉션 URI 와 무관하다)
+    """
     if AUTH_DISABLED or _session_email(request):
         return RedirectResponse("/admin", status_code=303)
 
@@ -1212,7 +1229,7 @@ async def login(request: Request):
     except Exception as e:
         # Google 의 OpenID 설정 문서를 받아오지 못한 경우 등
         logger.error(f"❌ Google 로그인 시작 실패: {e!r}")
-        return _message_page("로그인 실패", "Google 과 통신하는 중 문제가 발생했습니다.", 502, "다시 시도")
+        return _message_page("로그인 실패", "Google 과 통신하는 중 문제가 발생했습니다.", 502, "로그인 페이지로")
 
 
 @app.get("/auth/callback")
@@ -1228,10 +1245,10 @@ async def auth_callback(request: Request):
         # 여기서는 기존 세션을 지우지 않는다. 이 분기는 다른 사이트가 /auth/callback?error=x 로
         # 이동시키기만 해도 도달하므로(Lax 쿠키는 최상위 GET 에 실린다), 지우면 강제 로그아웃 수단이 된다.
         logger.warning(f"🚫 OAuth 실패: {str(e.error)[:64]!r}")   # error 는 쿼리스트링에서 온 값
-        return _message_page("로그인 실패", "Google 로그인에 실패했습니다. 다시 시도해 주세요.", 400, "다시 로그인")
+        return _message_page("로그인 실패", "Google 로그인에 실패했습니다. 다시 시도해 주세요.", 400, "로그인 페이지로")
     except Exception as e:
         logger.error(f"❌ OAuth 처리 중 오류: {e!r}")
-        return _message_page("로그인 실패", "Google 과 통신하는 중 문제가 발생했습니다.", 502, "다시 로그인")
+        return _message_page("로그인 실패", "Google 과 통신하는 중 문제가 발생했습니다.", 502, "로그인 페이지로")
 
     userinfo = token.get("userinfo") or {}
     email = str(userinfo.get("email", "")).strip().lower()
@@ -1273,9 +1290,9 @@ async def logout(request: Request):
             "로그아웃 저장 실패",
             "이 브라우저에서는 로그아웃됐지만, 서버가 세션 폐기를 디스크에 저장하지 못했습니다. "
             "서버가 재시작되면 다른 기기의 로그인이 다시 유효해질 수 있으니 SESSION_SECRET 을 교체하세요.",
-            500, "다시 로그인",
+            500, "로그인 페이지로",
         )
-    return _message_page("로그아웃됨", "로그아웃되었습니다.", 200, "다시 로그인")
+    return _message_page("로그아웃됨", "로그아웃되었습니다.", 200, "로그인 페이지로")
 
 
 # ──────────────────────────────────────────────
@@ -1283,9 +1300,17 @@ async def logout(request: Request):
 # ──────────────────────────────────────────────
 
 @app.get("/")
-async def root():
-    """루트 경로 접속 시 관리자 페이지로 리다이렉트"""
-    return RedirectResponse(url="/admin")
+async def root(request: Request):
+    """
+    로그인 전 메인 페이지. 이미 로그인돼 있으면(또는 인증이 꺼져 있으면) 관리자 페이지로 보낸다.
+    로그인 버튼은 /login 으로 이어지고, 거기서 Google 로 넘어간다.
+    """
+    if AUTH_DISABLED or _session_email(request):
+        return RedirectResponse(url="/admin", status_code=303)
+    page = STATIC_DIR / "login.html"
+    if not page.exists():
+        return RedirectResponse(url="/login", status_code=303)
+    return FileResponse(page, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/admin")

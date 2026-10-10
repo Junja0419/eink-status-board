@@ -60,7 +60,7 @@ CrowPanel 3.7" E-paper
 ### Server (`server/main.py`)
 - **단일 파일 구조**: 모든 API, 인증, WebSocket 핸들러, 이미지·텍스트 렌더링이 `main.py` 하나에 있음
 - **인증은 secure-by-default**: `auth_gate`(`@app.middleware("http")`)가 모든 HTTP 요청을 먼저 검사한다.
-  `PUBLIC_PATHS`(`/healthz`, `/login`, `/auth/callback`, `/logout`)만 무인증, `API_KEY_PATHS`(`/api/shortcuts/names`, `/api/shortcuts/activate`)만 세션 **또는** `X-API-Key`(`Authorization: Bearer` 도 허용), 나머지는 전부 Google 세션 필수. 새 라우트는 아무것도 안 해도 보호된다 — 두 집합에 넣는 것은 의도적 결정일 때만, 상태를 바꾸는 라우트를 API 키에 열지 말 것
+  `PUBLIC_PATHS`(`/`=로그인 전 메인 페이지 `static/login.html`, `/healthz`, `/login`, `/auth/callback`, `/logout`)만 무인증, `API_KEY_PATHS`(`/api/shortcuts/names`, `/api/shortcuts/activate`)만 세션 **또는** `X-API-Key`(`Authorization: Bearer` 도 허용), 나머지는 전부 Google 세션 필수. 새 라우트는 아무것도 안 해도 보호된다 — 두 집합에 넣는 것은 의도적 결정일 때만, 상태를 바꾸는 라우트를 API 키에 열지 말 것
 - **`auth_gate` 는 HTTP 미들웨어라 WebSocket 라우트를 덮지 못한다**: `/ws` 핸들러가 `_device_authorized()`(`X-Device-Token`)로 직접 검사하고, 틀리면 accept 전에 close(핸드셰이크 HTTP 403). **앞으로 WebSocket 라우트를 추가하면 반드시 스스로 인증할 것**. 게이트는 라우터와 같은 `request.scope["path"]` 로 경로를 판단한다
 - **비밀 비교**: `_secret_matches`(`hmac.compare_digest`, 기대값이 비어 있으면 항상 거부). `API_KEY` 가 비면 단축어 경로는 세션만, `DEVICE_TOKEN` 이 비면 어떤 디바이스도 접속 불가
 - **세션**: 로그인 후 `request.session["email"]` 만 저장(Google 토큰은 저장 안 함). `_session_email` 이 요청마다 `ALLOWED_EMAILS` 를 다시 검사한다. `/auth/callback` 은 `email_verified is True` + 소문자 이메일 일치일 때만 세션 발급(Authlib 이 state·nonce·PKCE S256·id_token 서명을 검증). 쿠키 `eink_session`, SameSite=Lax, `PUBLIC_IS_HTTPS`(스킴 대소문자 무시) 면 Secure, 30일. 세션은 서버에 저장되지 않는 서명 쿠키이므로 개별 삭제 대신 **세션 세대**(`session_generation`, `secrets.randbits(53)`)로 폐기한다: 로그인 시 `session["gen"]` 에 현재 세대를 넣고, `_session_email` 은 `gen` 이 서버의 현재 세대와 같을 때만 받아들인다(서명·30일·`ALLOWED_EMAILS` 검사에 더해). `POST /logout` 은 **유효한 세션이 있을 때만** 세대를 새 무작위 값으로 바꿔 저장한다(다른 기기·복사된 쿠키·다른 허용 계정 포함 전부 폐기, 세션 없는 교차 사이트 POST 는 아무것도 못 바꿈). 판정이 시계와 무관하다(시각 비교를 도입하지 말 것). **fail closed**: 세대의 기본값이 무작위라 `state.json` 을 잃거나 깨지면 시작할 때 새 세대가 정해져 옛 쿠키가 모두 거부되고 모두 한 번 다시 로그인할 뿐이다. `restore_state()` 가 저장된 세대(`state.json` 의 `session_generation`)가 있으면 이어 쓰고 lifespan 이 시작 직후 저장한다. 오래된 백업을 복원하면 옛 세대가 돌아와 그 세대로 발급된 쿠키가 다시 유효해질 수 있으므로 복원 뒤 로그인→로그아웃 한 번 또는 `SESSION_SECRET` 교체. 로그아웃의 저장이 실패하면 500 "로그아웃 저장 실패" 페이지로 `SESSION_SECRET` 교체를 안내한다. 콜백의 오류 분기(OAuthError·예외)는 기존 세션을 **지우지 않는다** — `/auth/callback?error=x` 로의 교차 사이트 이동으로 도달할 수 있어 지우면 강제 로그아웃 수단이 된다. state 검증을 통과해 Google 로그인을 마친 뒤 허용되지 않은 계정일 때만 `session.clear()`. `/login` 이 Google 설정 문서를 못 받으면 502 안내 페이지
@@ -90,6 +90,7 @@ CrowPanel 3.7" E-paper
 
 ### Admin UI (`server/static/admin.html`)
 - Vanilla HTML/JS/CSS 단일 파일, 외부 프레임워크 없음
+- 로그인 흐름: `/`(메인, 버튼) → `/login`(Google 로 이동) → `/auth/callback` → `/admin`. 미인증 브라우저 GET 은 `/` 로 303, Admin 의 fetch 401 도 `/` 로 이동. 리디렉션 URI 는 항상 `PUBLIC_BASE_URL + /auth/callback` 이며 메인 페이지 경로와 무관
 - Google 로그인/로그아웃(로그아웃은 HTML 응답이라 fetch 가 아닌 폼 제출), 디바이스 목록, 강제 새로고침, 활성 프리셋 강조, 이름 인라인 변경, 순서 변경, 이미지·텍스트 프리셋 생성(텍스트는 실시간 미리보기), 1-bit 흑백 미리보기, 단축어 가이드(서버 URL 은 https 만 허용, http 는 localhost/127.0.0.1 만 예외 — `X-API-Key` 평문 전송 방지)
 
 ## Key Constants
