@@ -1406,6 +1406,15 @@ async def admin_page():
     return FileResponse(html_path, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
 
+@app.get("/suggest")
+async def suggest_page():
+    """일정 제안 확인 화면. 열기만 해서는 아무것도 바뀌지 않는다 (적용은 POST /api/suggestions/apply)."""
+    page = STATIC_DIR / "suggest.html"
+    if not page.exists():
+        return JSONResponse(status_code=404, content={"error": "suggest.html 파일을 찾을 수 없습니다."})
+    return FileResponse(page, media_type="text/html", headers={"Cache-Control": "no-cache"})
+
+
 def _icon_route(filename: str, media_type: str):
     async def serve_icon():
         path = STATIC_DIR / filename
