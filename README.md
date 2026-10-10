@@ -40,11 +40,14 @@ eink-status-board/
 ├── src/                           # Elecrow EPaperDrive 드라이버 (UC8253)
 ├── upload.sh                      # arduino-cli 컴파일 + 업로드
 ├── tools/ctags-shim/ctags         # Rosetta 없는 Apple Silicon 용 ctags 대용품 (upload.sh 가 필요할 때만 사용)
+├── tools/make_icons.py            # 파비콘(server/static/favicon.*, apple-touch-icon.png) 생성기
 ├── server/
 │   ├── main.py                    # FastAPI 서버 (인증 + API + WebSocket + 이미지 파이프라인)
 │   ├── requirements.txt
 │   ├── .env                       # 환경변수·비밀 값 (git 제외, 직접 생성)
 │   ├── static/admin.html          # 관리자 페이지 (단일 HTML, 프레임워크 없음)
+│   ├── static/login.html          # 로그인 전 메인 페이지
+│   ├── static/favicon.*           # 파비콘 (tools/make_icons.py 로 생성)
 │   └── data/                      # 런타임 데이터 (images/.gitkeep 만 추적, 나머지는 git 제외)
 │       ├── presets.json           #   프리셋 메타데이터 (배열 순서 = 표시 순서)
 │       ├── state.json             #   마지막 활성 프리셋 + 세션 세대 값 + 디바이스 접속 이력
@@ -188,7 +191,7 @@ ESP32 시리얼 모니터(115200)에 `[WebSocket] ✅ 연결 성공!` 이 뜨고
 | 세션 또는 API 키 | 세션, 또는 `X-API-Key: <API_KEY>` 헤더 (`Authorization: Bearer <API_KEY>` 도 허용) |
 | 디바이스 토큰 | `X-Device-Token: <DEVICE_TOKEN>` 헤더 (WebSocket 핸드셰이크) |
 
-- 모든 HTTP 경로는 **기본적으로 세션이 필요**합니다. 예외는 `/`(로그인 전 메인 페이지), `/healthz`, `/login`, `/auth/callback`, `/logout`(공개)과 `/api/shortcuts/*` 두 경로(API 키 허용)뿐입니다.
+- 모든 HTTP 경로는 **기본적으로 세션이 필요**합니다. 예외는 `/`(로그인 전 메인 페이지), `/healthz`, `/login`, `/auth/callback`, `/logout`, 파비콘 3개(공개)와 `/api/shortcuts/*` 두 경로(API 키 허용)뿐입니다.
 - 인증에 실패하면 `Accept` 에 `text/html` 이 있는 GET(브라우저 주소창)은 `303` 으로 로그인 전 메인 페이지(`/`)에 보내고, 그 외에는 `401 {"detail":"로그인이 필요합니다."}` 를 돌려줍니다.
 - 오류 본문은 `{"detail": "..."}` 입니다. 요청 본문 검증 실패는 `422` 입니다.
 - 인증을 통과한 뒤 본문 크기를 검사합니다. 이미지 업로드(`POST /api/presets`)는 5MB, 그 외 모든 요청은 16KB 를 넘으면 `413`, `Content-Length` 없이 chunked 로 보내면 `411` 입니다. 브라우저·단축어·curl 은 `Content-Length` 를 자동으로 보냅니다.
@@ -204,6 +207,7 @@ ESP32 시리얼 모니터(115200)에 `[WebSocket] ✅ 연결 성공!` 이 뜨고
 | `POST` | `/logout` | 없음 | 로그아웃. **유효한 세션으로 호출하면 서버의 세션 세대 값을 새 무작위 값으로 바꿔, 그 전에 발급된 모든 세션을 폐기**함 (다른 브라우저·기기, 복사된 쿠키, 다른 허용 계정의 세션 포함). 세션 없이 온 요청(교차 사이트 POST 등)은 아무것도 폐기하지 않음. `200` 안내 페이지(HTML). 폐기를 디스크에 저장하지 못하면 `500` "로그아웃 저장 실패" 페이지가 `SESSION_SECRET` 교체를 안내 |
 | `GET` | `/` | 없음 | 로그인 전 메인 페이지(`static/login.html`, "Google 계정으로 로그인" 버튼 → `/login`). 이미 로그인했으면 `303` → `/admin` |
 | `GET` | `/admin` | 세션 | 관리자 페이지 |
+| `GET` | `/favicon.ico`, `/favicon.svg`, `/apple-touch-icon.png` | 없음 | 파비콘·홈 화면 아이콘 (로그인 전 페이지에서도 쓰므로 공개, 하루 캐시) |
 
 ### 상태·디스플레이
 
