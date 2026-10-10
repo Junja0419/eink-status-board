@@ -537,6 +537,14 @@ def load_state() -> dict:
         return {}
 
 
+def _pending_revert_json() -> Optional[dict]:
+    entry = pending_revert
+    if entry is None:
+        return None
+    return {"revert_to": entry["revert_to"], "expected": entry["expected"],
+            "at": entry["at"].isoformat(timespec="seconds")}
+
+
 async def persist_state() -> bool:
     """
     마지막 활성 프리셋, 디바이스 이력, 세션 세대를 state.json 에 저장한다.
@@ -548,6 +556,7 @@ async def persist_state() -> bool:
             "active_preset_id": current_preset_id,
             "session_generation": session_generation,
             "devices": {device_id: dict(info) for device_id, info in known_devices.items()},
+            "pending_revert": _pending_revert_json(),
         }
         try:
             await asyncio.to_thread(_atomic_write_json, STATE_FILE, snapshot)
@@ -575,7 +584,7 @@ def restore_state() -> None:
     재시작 직후 접속한 ESP32 가 곧바로 화면을 복원할 수 있다.
     """
     global current_status_text, current_preset_id, current_frame_bytes, current_display_image
-    global session_generation
+    global session_generation, pending_revert
 
     state = load_state()
 
@@ -592,6 +601,13 @@ def restore_state() -> None:
             entry = clean_device_entry(device_id, raw)
             if entry is not None:
                 known_devices[device_id] = entry
+
+    # 일정 종료 복귀 예약 — 두 ID 와 시각이 모두 올바를 때만 (지난 시각이면 lifespan 이 곧바로 처리)
+    raw = state.get("pending_revert")
+    if isinstance(raw, dict):
+        revert_to, expected, moment = raw.get("revert_to"), raw.get("expected"), parse_until(raw.get("at"))
+        if moment is not None and all(isinstance(i, str) and PRESET_ID_RE.fullmatch(i) for i in (revert_to, expected)):
+            pending_revert = {"revert_to": revert_to, "expected": expected, "at": moment}
 
     preset_id = state.get("active_preset_id")
     if not isinstance(preset_id, str) or not PRESET_ID_RE.fullmatch(preset_id):
@@ -1119,8 +1135,14 @@ async def lifespan(app: FastAPI):
         logger.error(f"❌ 저장된 상태를 불러오지 못했습니다: {e!r}")
     # 세션 세대를 바로 저장해 둔다 — 다음 재시작에도 같은 값을 써서 로그인이 유지되게
     await persist_state()
+    # 복원된 일정 종료 복귀 예약 (이미 지난 시각이면 곧바로 처리된다)
+    _schedule_revert()
     logger.info("========================================")
     yield
+    # 복귀 타이머는 끄기만 한다 — 예약 자체는 state.json 에 남아 다음 시작 때 이어진다
+    if _revert_task is not None and not _revert_task.done():
+        _revert_task.cancel()
+        await asyncio.gather(_revert_task, return_exceptions=True)
     # 종료 시 예약돼 있던 디바이스 이력 저장을 마무리한다
     if _persist_task is not None and not _persist_task.done():
         _persist_task.cancel()
