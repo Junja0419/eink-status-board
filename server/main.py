@@ -72,7 +72,7 @@ from fastapi.responses import (
     RedirectResponse, Response,
 )
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.sessions import SessionMiddleware
 
 # .env 파일 로드 (있을 때만)
@@ -384,6 +384,11 @@ _deferred_force: bool = False                  # 예약된 전송에 force_refre
 
 # 디바이스 이력 저장 예약 작업 (디바운스)
 _persist_task: Optional[asyncio.Task] = None
+
+# 제안을 받아 바꾼 프리셋을 일정 종료 시각에 되돌리는 예약 (하나만 유지, state.json 에 저장)
+# {"revert_to": 바꾸기 직전 프리셋 id, "expected": 제안으로 적용한 id, "at": aware UTC datetime}
+pending_revert: Optional[dict] = None
+_revert_task: Optional[asyncio.Task] = None
 
 
 def _now_iso() -> str:
@@ -1408,6 +1413,7 @@ async def get_status(request: Request):
         "devices": device_snapshot(),
         "auth_enabled": not AUTH_DISABLED,
         "user": None if AUTH_DISABLED else _session_email(request),
+        "pending_revert": await asyncio.to_thread(_revert_info),
     }
 
 
@@ -1713,7 +1719,12 @@ async def delete_preset(preset_id: str):
         was_active = current_preset_id == preset_id
         if was_active:
             current_preset_id = None    # 재시작 시 복원 대상에서 제외
-    if was_active:
+        # 복귀 예약이 지운 프리셋을 가리키면 지킬 수 없으므로 함께 지운다
+        revert_dropped = pending_revert is not None and preset_id in (
+            pending_revert["revert_to"], pending_revert["expected"])
+        if revert_dropped:
+            _clear_pending_revert()
+    if was_active or revert_dropped:
         await persist_state()
 
     logger.info(f"🗑️  프리셋 삭제: '{target['name']}'")
@@ -1767,16 +1778,17 @@ async def push_current_frame(force: bool) -> tuple[int, bool]:
     return await _send_current_frame(force), False
 
 
-async def activate(preset: dict, force: bool) -> dict:
+async def _activate_core(
+    preset: dict, force: bool, expected_current: Optional[str] = None
+) -> tuple[Optional[dict], Optional[str]]:
     """
-    프리셋을 현재 화면으로 만들고 디바이스에 푸시한다.
+    activate() 의 본체. (결과, 교체 직전의 current_preset_id) 를 돌려준다.
 
-    프레임이 지금 표시 중인 것과 바이트 단위로 같으면 전송을 생략한다
-    (E-ink 는 갱신 횟수가 수명이므로 불필요한 리프레시를 피한다).
-    force=True 면 force_refresh 메시지를 먼저 보내 펌웨어 쪽 CRC 검사도 건너뛰게 한다.
-    실제 전송은 push_current_frame() 의 간격 제한을 따른다.
+    expected_current 가 주어졌는데 지금 표시 중인 프리셋이 그것이 아니면 아무것도 바꾸지 않고
+    (None, 현재 id) 를 돌려준다 — 복귀 조건 검사와 "직전 프리셋" 기록을 프레임 교체와 같은
+    _activate_lock 안에서 해, 동시에 들어온 활성화와 엇갈리지 않게 한다.
     """
-    global current_status_text, current_preset_id, current_frame_bytes, current_display_image
+    global current_status_text, current_preset_id, current_frame_bytes, current_display_image, pending_revert
 
     try:
         img = await asyncio.to_thread(load_preset_image, preset["id"])
@@ -1786,11 +1798,15 @@ async def activate(preset: dict, force: bool) -> dict:
     frame_bytes = await asyncio.to_thread(image_to_1bit_bytes, img)
 
     async with _activate_lock:
+        if expected_current is not None and current_preset_id != expected_current:
+            return None, current_preset_id
+
         # 이미지를 읽는 사이에 이름이 바뀌었거나 삭제됐을 수 있으므로 락 안에서 다시 조회한다
         preset = await asyncio.to_thread(get_preset, preset["id"])
         if preset is None:
             raise HTTPException(404, "프리셋을 찾을 수 없습니다.")
 
+        previous = current_preset_id
         unchanged = frame_bytes == current_frame_bytes and not force
         push_pending = _deferred_push is not None and not _deferred_push.done()
 
@@ -1798,6 +1814,10 @@ async def activate(preset: dict, force: bool) -> dict:
         current_preset_id = preset["id"]
         current_display_image = img
         current_frame_bytes = frame_bytes
+
+        # 제안으로 바꾼 상태에서 벗어나면(직접 다른 프리셋을 고름) 복귀 예약은 지킬 이유가 없다
+        if pending_revert is not None and current_preset_id != pending_revert["expected"]:
+            _clear_pending_revert()
 
         if unchanged:
             # 같은 프레임이 아직 전송 대기 중이면 "이미 표시 중"이 아니라 "예약됨"으로 알린다
@@ -1824,6 +1844,80 @@ async def activate(preset: dict, force: bool) -> dict:
         "clients_notified": notified,
         "skipped": skipped,
         "deferred": deferred,
+    }, previous
+
+
+async def activate(preset: dict, force: bool) -> dict:
+    """
+    프리셋을 현재 화면으로 만들고 디바이스에 푸시한다.
+
+    프레임이 지금 표시 중인 것과 바이트 단위로 같으면 전송을 생략한다
+    (E-ink 는 갱신 횟수가 수명이므로 불필요한 리프레시를 피한다).
+    force=True 면 force_refresh 메시지를 먼저 보내 펌웨어 쪽 CRC 검사도 건너뛰게 한다.
+    실제 전송은 push_current_frame() 의 간격 제한을 따른다.
+    """
+    result, _ = await _activate_core(preset, force)
+    return result
+
+
+# ──────────────────────────────────────────────
+#  일정 제안 — 복귀 예약
+# ──────────────────────────────────────────────
+
+def _schedule_revert() -> None:
+    """pending_revert 의 시각에 맞춰 복귀 타이머를 다시 건다. 예약이 없으면 타이머만 끈다."""
+    global _revert_task
+    if _revert_task is not None and not _revert_task.done() and _revert_task is not asyncio.current_task():
+        _revert_task.cancel()
+    _revert_task = asyncio.create_task(_revert_later(pending_revert)) if pending_revert is not None else None
+
+
+def _clear_pending_revert() -> None:
+    global pending_revert
+    pending_revert = None
+    _schedule_revert()
+
+
+async def _revert_later(entry: dict) -> None:
+    delay = (entry["at"] - datetime.now(timezone.utc)).total_seconds()
+    if delay > 0:
+        await asyncio.sleep(delay)
+    try:
+        await _run_revert(entry)
+    except Exception as e:      # 타이머 작업의 예외는 아무도 받지 않으므로 여기서 남긴다
+        logger.error(f"❌ 일정 종료 복귀 실패: {e!r}")
+
+
+async def _run_revert(entry: dict) -> None:
+    """일정 종료 시각. 그때도 제안한 프리셋이 표시 중일 때만 직전 프리셋으로 되돌린다."""
+    global pending_revert, _revert_task
+    if pending_revert is not entry:          # 그 사이 취소·교체됐다
+        return
+    pending_revert = None
+    _revert_task = None
+
+    preset = await asyncio.to_thread(get_preset, entry["revert_to"])
+    if preset is None:
+        logger.info("↩️  일정 종료 — 되돌릴 프리셋이 삭제돼 그대로 둡니다")
+    else:
+        result, _ = await _activate_core(preset, force=False, expected_current=entry["expected"])
+        if result is None:
+            logger.info("↩️  일정 종료 — 그 사이 다른 프리셋으로 바뀌어 그대로 둡니다")
+        else:
+            logger.info(f"↩️  일정 종료 — '{preset['name']}' 으로 복귀")
+    await persist_state()
+
+
+def _revert_info() -> Optional[dict]:
+    """Admin·제안 화면에 보여줄 복귀 예약. 없으면 None."""
+    entry = pending_revert
+    if entry is None:
+        return None
+    preset = get_preset(entry["revert_to"])
+    return {
+        "at": entry["at"].isoformat(timespec="seconds"),
+        "revert_to_id": entry["revert_to"],
+        "revert_to_name": preset["name"] if preset else None,
     }
 
 
@@ -1834,6 +1928,58 @@ async def activate_preset(preset_id: str, force: bool = False):
     if not preset:
         raise HTTPException(404, "프리셋을 찾을 수 없습니다.")
     return await activate(preset, force)
+
+
+class SuggestionApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preset_id: str = Field(pattern=r"^[0-9a-f]{8}$")
+    until: Optional[str] = Field(default=None, max_length=MAX_UNTIL_LENGTH)
+
+
+@app.post("/api/suggestions/apply")
+async def apply_suggestion(req: SuggestionApplyRequest):
+    """
+    제안 화면의 [바꾸기]. 프리셋을 적용하고, 일정 종료 시각(until)에 바꾸기 직전 프리셋으로
+    돌아가도록 예약한다. 연속 일정이면 처음 상태를 복귀 대상으로 유지하고 시각만 바꾼다.
+    until 이 없거나 형식이 틀리거나 24시간 넘게 남았으면 적용만 한다. 이미 지났으면 409.
+    """
+    global pending_revert
+
+    preset = await asyncio.to_thread(get_preset, req.preset_id)
+    if not preset:
+        raise HTTPException(404, "프리셋을 찾을 수 없습니다.")
+
+    now = datetime.now(timezone.utc)
+    until = parse_until(req.until) if req.until else None
+    if until is not None and until <= now:
+        raise HTTPException(409, "이미 끝난 일정입니다.")
+
+    old = pending_revert                     # 적용하면서 지워질 수 있으므로 먼저 떠 둔다
+    result, previous = await _activate_core(preset, force=False)
+    baseline = old["revert_to"] if old is not None and previous == old["expected"] else previous
+
+    if (until is not None and until <= now + timedelta(seconds=MAX_REVERT_AHEAD)
+            and baseline is not None and baseline != preset["id"]):
+        pending_revert = {"revert_to": baseline, "expected": preset["id"], "at": until}
+        _schedule_revert()
+        await persist_state()
+        logger.info(f"📅 제안 적용: '{preset['name']}' — {until.isoformat(timespec='minutes')} 에 복귀 예약")
+    else:
+        logger.info(f"📅 제안 적용: '{preset['name']}' (복귀 예약 없음)")
+
+    return {**result, "revert": await asyncio.to_thread(_revert_info)}
+
+
+@app.delete("/api/suggestions/revert")
+async def cancel_revert():
+    """일정 종료 복귀 예약을 취소한다 (Admin 의 [취소])."""
+    cancelled = pending_revert is not None
+    if cancelled:
+        _clear_pending_revert()
+        await persist_state()
+        logger.info("📅 복귀 예약 취소")
+    return {"cancelled": cancelled}
 
 
 @app.get("/api/presets/{preset_id}/preview.png")
