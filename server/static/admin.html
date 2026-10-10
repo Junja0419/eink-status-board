@@ -279,6 +279,16 @@
       color: var(--ink-muted);
       overflow-wrap: anywhere;
     }
+    .revert-note {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 6px 8px;
+      margin-top: 8px;
+      font-size: 13px;
+      color: var(--ink-subtle);
+    }
 
     /* ── 디바이스 목록 ── */
     .device-section {
@@ -939,6 +949,11 @@
           </div>
         </div>
         <div class="preview-label" id="current-status-label">표시 중인 내용 없음</div>
+        <div class="revert-note" id="revert-note" hidden>
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          <span id="revert-text"></span>
+          <button type="button" class="btn btn-ghost btn-sm" id="revert-cancel">취소</button>
+        </div>
 
         <div class="device-section">
           <h3 class="subhead">디바이스</h3>
@@ -1095,6 +1110,7 @@
       // 이벤트 리스너
       document.getElementById('create-preset-form').addEventListener('submit', handleCreatePreset);
       document.getElementById('refresh-btn').addEventListener('click', handleForceRefresh);
+      document.getElementById('revert-cancel').addEventListener('click', handleCancelRevert);
       document.getElementById('mode-control').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-mode]');
         if (btn) setCreateMode(btn.dataset.mode);
@@ -1155,6 +1171,7 @@
         renderConnection(data.connected_clients);
         renderUser(data);
         renderCurrentDisplay(data);
+        renderRevert(data.pending_revert ?? null);
         activePresetId = data.active_preset_id ?? null;
         applyActiveHighlight();
         renderDevices(Array.isArray(data.devices) ? data.devices : []);
@@ -1261,6 +1278,41 @@
         }
       } catch (err) {
         if (!(err instanceof AuthRedirect)) showToast(`${err.message}`, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    const revertTimeFmt = new Intl.DateTimeFormat('ko-KR', { hour: 'numeric', minute: '2-digit' });
+
+    /** 받침이 있으면 "으로", 없거나 ㄹ 받침이면 "로" */
+    function josaRo(word) {
+      const code = word.charCodeAt(word.length - 1) - 0xAC00;
+      if (!(code >= 0 && code <= 11171)) return '(으)로';
+      const jong = code % 28;
+      return jong === 0 || jong === 8 ? '로' : '으로';
+    }
+
+    /** 일정 제안으로 바꾼 화면이 언제 무엇으로 돌아가는지 보여준다 */
+    function renderRevert(info) {
+      const box = document.getElementById('revert-note');
+      if (!info) { box.hidden = true; return; }
+      const name = info.revert_to_name || '이전 상태';
+      document.getElementById('revert-text').textContent =
+        `${revertTimeFmt.format(new Date(info.at))}에 '${name}'${josaRo(name)} 돌아갑니다`;
+      box.hidden = false;
+    }
+
+    async function handleCancelRevert(e) {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const res = await apiFetch('/api/suggestions/revert', { method: 'DELETE' });
+        if (!res.ok) throw new Error(await errorDetail(res, '취소 실패'));
+        showToast('복귀 예약을 취소했습니다', 'info');
+        fetchStatus();
+      } catch (err) {
+        if (!(err instanceof AuthRedirect)) showToast(err.message, 'error');
       } finally {
         btn.disabled = false;
       }
