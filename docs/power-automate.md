@@ -66,7 +66,7 @@ concat('https://<도메인>/suggest?preset=', encodeUriComponent(outputs('Preset
 ④ Teams 메시지 (코드 보기로 붙여넣기):
 
 ```html
-<p><b>@{formatDateTime(convertFromUtc(item()?['start'], 'Korea Standard Time'), 'HH:mm')} @{item()?['subject']}</b></p>
+<p><b>@{convertTimeZone(item()?['start'], 'UTC', 'Korea Standard Time', 'HH:mm')} @{item()?['subject']}</b></p>
 <p>'@{outputs('Preset')}'(으)로 바꾸시겠어요?</p>
 <p><a href="@{outputs('Link')}">바꾸기 화면 열기</a></p>
 ```
@@ -112,6 +112,7 @@ concat('https://<도메인>/suggest?preset=', encodeUriComponent(outputs('Preset
 |------|-------------|
 | 메시지가 안 옴 | 실행 기록이 없으면 트리거가 안 돈 것 — Calendar Id 가 기본 일정인지 확인. Microsoft 는 드물게 트리거가 최대 1시간 늦을 수 있다고 안내합니다 |
 | 배열 필터링 실패 `The 'from' property value … is of type 'String'` | From 에 `@{…}` 로 넣어 문자열이 됐음 — ⓪ 을 fx 탭에 `@{}` 없이 다시 넣으세요 |
+| 메시지 게시 실패 `convertFromUtc … expects … a UTC date time` | 트리거의 `start`·`end` 는 끝에 `Z` 가 없어 `convertFromUtc` 가 거부함 — ④ 처럼 `convertTimeZone(…, 'UTC', 'Korea Standard Time', 'HH:mm')` 을 쓰세요 |
 | 6번 동작 실패 `BotNotInConversationRoster` 등 | Flow bot(Workflows 앱) 차단 — [메일로 받기](#teams-가-막혀-있을-때--메일로-받기) |
 | 링크를 열면 로그인 화면 | Teams 가 링크를 앱 안의 브라우저로 열면 Chrome 의 로그인 상태를 쓰지 못합니다. 한 번 로그인하면 원래 제안 화면으로 돌아오고, 그 브라우저에는 30일간 유지됩니다. 로그인이 막히면 "브라우저에서 열기" 로 Chrome 에서 여세요 |
 | "프리셋이 없습니다" | ② 의 이름과 Admin 의 프리셋 이름이 다름 (띄어쓰기 포함) |
