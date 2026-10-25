@@ -1245,7 +1245,8 @@ async def auth_gate(request: Request, call_next):
     모든 HTTP 요청의 관문. 라우트 핸들러(와 multipart 본문 파싱)보다 먼저 실행된다.
 
     1. 인증 — PUBLIC_PATHS 가 아니면 허용된 Google 세션이 있어야 한다.
-       API_KEY_PATHS 는 X-API-Key 로도 통과한다. 새 HTTP 라우트는 기본적으로 보호된다.
+       API_KEY_PATHS 는 API_KEY, SUGGEST_KEY_PATHS 는 SUGGEST_KEY 로도 통과한다 (X-API-Key 또는 Bearer —
+       키마다 자기 경로에만 통한다). 새 HTTP 라우트는 기본적으로 보호된다.
        (WebSocket 은 이 미들웨어를 거치지 않는다 — WS 라우트는 각자 인증해야 한다. /ws 참고)
     2. 본문 크기 — FastAPI/Starlette 는 엔드포인트 실행 전에 본문 전체를 받으므로(JSON 은 메모리,
        multipart 는 임시 파일), 한도를 넘는 Content-Length 는 여기서 413, chunked 는 411 로 끊는다.
@@ -2062,19 +2063,24 @@ async def accept_suggestion(req: SuggestionAcceptRequest):
     except HTTPException as e:
         if e.status_code == 409:
             return PlainTextResponse("이미 끝난 일정이라 바꾸지 않았습니다.")
+        if e.status_code == 404:        # 이미지 파일이 없거나 적용하는 사이 삭제됐다
+            return PlainTextResponse(f"'{name}' 프리셋을 불러오지 못해 바꾸지 않았습니다. Admin 에서 확인하세요.")
         raise
 
     entry = pending_revert
     back = ""
     if entry is not None and entry["expected"] == preset["id"]:
+        # 복귀 대상이 없으면 _run_revert 가 화면을 그대로 두므로 돌아간다고 말하지 않는다
         target = await asyncio.to_thread(get_preset, entry["revert_to"])
-        back_name = target["name"] if target else "이전 상태"
-        back = f" {entry['at'].astimezone(SUMMARY_TZ):%H:%M}에 '{back_name}'{_ro(back_name)} 돌아갑니다."
+        if target is not None:
+            at = entry["at"].astimezone(SUMMARY_TZ)
+            day = "내일 " if at.date() > datetime.now(SUMMARY_TZ).date() else ""   # 예약은 24시간 안이다
+            back = f" {day}{at:%H:%M}에 '{target['name']}'{_ro(target['name'])} 돌아갑니다."
 
     shown = preset["name"]
     if previous != preset["id"]:
         text = f"'{shown}'{_ro(shown)} 바꿨습니다.{back}"
-    elif back and (old is None or entry is None or old["at"] != entry["at"]):
+    elif back and (old is None or old["at"] != entry["at"]):
         text = f"'{shown}' 상태를 유지합니다.{back}"
     else:
         text = f"이미 '{shown}' 상태입니다.{back}"
