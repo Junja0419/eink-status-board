@@ -31,8 +31,8 @@ Outlook 일정 ─(시작 5분 전)→ Power Automate ─→ Teams 메시지 ─
 | 1 | 트리거 **When an upcoming event is starting soon (V3)** (Office 365 Outlook) | Calendar Id: `Calendar`(기본 일정) · Look-Ahead Time: `5` |
 | 2 | **Filter array** (데이터 작업, 한국어 화면: 배열 필터링) | From: 아래 ⓪ 을 **fx(식)** 로 · 고급 모드 식: 아래 ① |
 | 3 | **Apply to each** (컨트롤, 한국어 화면: 각각에 적용) | 이전 단계에서 출력 선택: 동적 콘텐츠에서 2번 동작의 **본문(Body)** |
-| 4 | (3 안) **Compose** — 이름을 `Preset` 으로 | 입력: 아래 ② |
-| 5 | (3 안) **Compose** — 이름을 `Link` 로 | 입력: 아래 ③ |
+| 4 | (3 안) **Compose**(데이터 작업, 한국어 화면: 작성) — 이름을 `Preset` 으로 | 입력: 아래 ② 를 **fx** 로 (보라색 식 토큰이 생겨야 함) |
+| 5 | (3 안) **Compose** — 이름을 `Link` 로 | 입력: 아래 ③ 을 **fx** 로 |
 | 6 | (3 안) **Post message in a chat or channel** (Microsoft Teams) | Post as: `Flow bot` · Post in: `Chat with Flow bot` · Recipient: 내 회사 이메일 · Message: 아래 ④ |
 
 > **식 넣는 법**: ⓪·②·③ 은 입력칸의 **fx** 탭에 `@{ }` 없이 넣습니다. `@{식}` 형태로 글 칸에 넣으면 결과가 **문자열**로 바뀌어
@@ -63,7 +63,7 @@ if(contains(toLower(coalesce(item()?['subject'], '')), '점심'), '점심 식사
 concat('https://<도메인>/suggest?preset=', encodeUriComponent(outputs('Preset')), '&until=', encodeUriComponent(item()?['endWithTimeZone']))
 ```
 
-④ Teams 메시지 (코드 보기로 붙여넣기):
+④ Teams 메시지 — 메시지 칸 도구 모음의 **`</>`(코드 보기)** 를 켜고 붙여넣습니다. 일반 보기에 넣으면 `<p>` 같은 태그가 글자 그대로 보입니다:
 
 ```html
 <p><b>@{convertTimeZone(item()?['start'], 'UTC', 'Korea Standard Time', 'HH:mm')} @{item()?['subject']}</b></p>
@@ -113,6 +113,8 @@ concat('https://<도메인>/suggest?preset=', encodeUriComponent(outputs('Preset
 | 메시지가 안 옴 | 실행 기록이 없으면 트리거가 안 돈 것 — Calendar Id 가 기본 일정인지 확인. Microsoft 는 드물게 트리거가 최대 1시간 늦을 수 있다고 안내합니다 |
 | 배열 필터링 실패 `The 'from' property value … is of type 'String'` | From 에 `@{…}` 로 넣어 문자열이 됐음 — ⓪ 을 fx 탭에 `@{}` 없이 다시 넣으세요 |
 | 메시지 게시 실패 `convertFromUtc … expects … a UTC date time` | 트리거의 `start`·`end` 는 끝에 `Z` 가 없어 `convertFromUtc` 가 거부함 — ④ 처럼 `convertTimeZone(…, 'UTC', 'Korea Standard Time', 'HH:mm')` 을 쓰세요 |
+| 메시지에 `if(contains(…` 나 `concat('https://…` 가 글자 그대로 보임 | Compose 입력을 글 칸에 넣었음 — ②·③ 을 **fx** 탭으로 다시 넣으세요 |
+| 메시지에 `<p>`·`<b>` 태그가 보임 | 메시지를 일반 보기에 붙여넣었음 — `</>`(코드 보기)에서 붙여넣거나, 태그 없이 세 줄로 쓰세요(주소는 Teams 가 자동으로 링크로 만듦) |
 | 6번 동작 실패 `BotNotInConversationRoster` 등 | Flow bot(Workflows 앱) 차단 — [메일로 받기](#teams-가-막혀-있을-때--메일로-받기) |
 | 링크를 열면 로그인 화면 | Teams 가 링크를 앱 안의 브라우저로 열면 Chrome 의 로그인 상태를 쓰지 못합니다. 한 번 로그인하면 원래 제안 화면으로 돌아오고, 그 브라우저에는 30일간 유지됩니다. 로그인이 막히면 "브라우저에서 열기" 로 Chrome 에서 여세요 |
 | "프리셋이 없습니다" | ② 의 이름과 Admin 의 프리셋 이름이 다름 (띄어쓰기 포함) |
