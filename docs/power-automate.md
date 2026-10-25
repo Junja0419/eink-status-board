@@ -29,11 +29,21 @@ Outlook 일정 ─(시작 5분 전)→ Power Automate ─→ Teams 메시지 ─
 | # | 동작 | 설정 |
 |---|------|------|
 | 1 | 트리거 **When an upcoming event is starting soon (V3)** (Office 365 Outlook) | Calendar Id: `Calendar`(기본 일정) · Look-Ahead Time: `5` |
-| 2 | **Filter array** (데이터 작업) | From: `@{triggerOutputs()?['body/value']}` · 고급 모드 식: 아래 ① |
-| 3 | **Apply to each** | 출력 선택: `@{body('Filter_array')}` |
+| 2 | **Filter array** (데이터 작업, 한국어 화면: 배열 필터링) | From: 아래 ⓪ 을 **fx(식)** 로 · 고급 모드 식: 아래 ① |
+| 3 | **Apply to each** (컨트롤, 한국어 화면: 각각에 적용) | 이전 단계에서 출력 선택: 동적 콘텐츠에서 2번 동작의 **본문(Body)** |
 | 4 | (3 안) **Compose** — 이름을 `Preset` 으로 | 입력: 아래 ② |
 | 5 | (3 안) **Compose** — 이름을 `Link` 로 | 입력: 아래 ③ |
 | 6 | (3 안) **Post message in a chat or channel** (Microsoft Teams) | Post as: `Flow bot` · Post in: `Chat with Flow bot` · Recipient: 내 회사 이메일 · Message: 아래 ④ |
+
+> **식 넣는 법**: ⓪·②·③ 은 입력칸의 **fx** 탭에 `@{ }` 없이 넣습니다. `@{식}` 형태로 글 칸에 넣으면 결과가 **문자열**로 바뀌어
+> 배열 필터링이 `The 'from' property value … is of type 'String'` 으로 실패합니다. `@{ }` 는 ④ 처럼 글 안에 값을 끼워 넣을 때만 씁니다.
+> 한국어 화면에서는 동작 기본 이름이 영어와 달라 `body('Filter_array')` 같은 이름 참조가 틀릴 수 있으니, 이전 단계 값은 동적 콘텐츠에서 고릅니다.
+
+⓪ From — 트리거의 **Split On** 설정(일정마다 따로 실행 / 목록으로 한 번에)과 상관없이 배열로 맞춥니다:
+
+```
+if(equals(triggerBody()?['value'], null), createArray(triggerBody()), triggerBody()?['value'])
+```
 
 ① 제외 조건 — 종일 일정, "약속 없음(free)", 거절한 일정, 취소된 일정:
 
@@ -101,6 +111,7 @@ concat('https://<도메인>/suggest?preset=', encodeUriComponent(outputs('Preset
 | 증상 | 원인과 해결 |
 |------|-------------|
 | 메시지가 안 옴 | 실행 기록이 없으면 트리거가 안 돈 것 — Calendar Id 가 기본 일정인지 확인. Microsoft 는 드물게 트리거가 최대 1시간 늦을 수 있다고 안내합니다 |
+| 배열 필터링 실패 `The 'from' property value … is of type 'String'` | From 에 `@{…}` 로 넣어 문자열이 됐음 — ⓪ 을 fx 탭에 `@{}` 없이 다시 넣으세요 |
 | 6번 동작 실패 `BotNotInConversationRoster` 등 | Flow bot(Workflows 앱) 차단 — [메일로 받기](#teams-가-막혀-있을-때--메일로-받기) |
 | 링크를 열면 로그인 화면 | Teams 가 링크를 앱 안의 브라우저로 열면 Chrome 의 로그인 상태를 쓰지 못합니다. 한 번 로그인하면 원래 제안 화면으로 돌아오고, 그 브라우저에는 30일간 유지됩니다. 로그인이 막히면 "브라우저에서 열기" 로 Chrome 에서 여세요 |
 | "프리셋이 없습니다" | ② 의 이름과 Admin 의 프리셋 이름이 다름 (띄어쓰기 포함) |
