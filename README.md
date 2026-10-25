@@ -20,6 +20,7 @@ flowchart LR
 |-----------|------|------|-----------------|
 | 브라우저 (Admin) | `https://<도메인>/admin` | Google 로그인 → 세션 쿠키. `ALLOWED_EMAILS` 에 있는 계정만 | 전체 API |
 | 단축어 / curl | `https://<도메인>/api/shortcuts/*` | `X-API-Key` 헤더 (`API_KEY`) | 이름 목록 조회, 이름으로 활성화 |
+| Power Automate (Teams 카드 [바꾸기]) | `https://<도메인>/api/suggestions/accept` | `X-API-Key` 헤더 (`SUGGEST_KEY`) | 이름으로 일정 제안 적용 |
 | ESP32 | `wss://<도메인>/ws` | `X-Device-Token` 헤더 (`DEVICE_TOKEN`) | WebSocket 연결 하나 |
 
 ## 목차
@@ -156,6 +157,7 @@ ESP32 시리얼 모니터(115200)에 `[WebSocket] ✅ 연결 성공!` 이 뜨고
 | `SESSION_SECRET` | 없음 | 인증 사용 시 | 세션 쿠키 서명 키. **32자 이상** 무작위. 바꾸면 모든 로그인이 풀림 |
 | `API_KEY` | 없음 | 단축어를 쓸 때 | Apple 단축어용. `/api/shortcuts/*` 에만 통함. **24자 이상**. 비우면 단축어 경로도 로그인 세션만 허용 |
 | `DEVICE_TOKEN` | 없음 | ESP32 를 쓸 때 | 펌웨어의 `DEVICE_TOKEN` 과 같은 값. `/ws` 에만 통함. **24자 이상**. 비우면 어떤 디바이스도 접속 불가 |
+| `SUGGEST_KEY` | 없음 | Teams 카드 버튼을 쓸 때 | Power Automate 의 HTTP 동작용. `/api/suggestions/accept` 에만 통함. **24자 이상**, 다른 비밀 값과 달라야 함. 비우면 그 경로는 로그인 세션만 허용 ([Power Automate 연동](docs/power-automate.md#버튼-카드로-바로-적용-http)) |
 | `FONT_PATH` | 자동 탐색 | — | 텍스트 프리셋용 한글 폰트 파일 경로. 지정하면 최우선으로 사용 |
 | `MIN_PUSH_INTERVAL` | `3` | — | 패널로 프레임을 보내는 최소 간격(초). 이보다 빨리 들어온 활성화·새로고침은 버리지 않고 하나로 합쳐, 간격이 지난 뒤 **마지막 상태만** 한 번 보냄 (E-ink 수명 보호) |
 
@@ -190,9 +192,10 @@ ESP32 시리얼 모니터(115200)에 `[WebSocket] ✅ 연결 성공!` 이 뜨고
 | 없음 | 누구나 |
 | 세션 | Google 로그인 후 받은 쿠키 `eink_session` (브라우저) |
 | 세션 또는 API 키 | 세션, 또는 `X-API-Key: <API_KEY>` 헤더 (`Authorization: Bearer <API_KEY>` 도 허용) |
+| 세션 또는 제안 키 | 세션, 또는 `X-API-Key: <SUGGEST_KEY>` 헤더 (`Bearer` 도 허용). `API_KEY` 로는 열리지 않음 |
 | 디바이스 토큰 | `X-Device-Token: <DEVICE_TOKEN>` 헤더 (WebSocket 핸드셰이크) |
 
-- 모든 HTTP 경로는 **기본적으로 세션이 필요**합니다. 예외는 `/`(로그인 전 메인 페이지), `/healthz`, `/login`, `/auth/callback`, `/logout`, 파비콘 3개(공개)와 `/api/shortcuts/*` 두 경로(API 키 허용)뿐입니다.
+- 모든 HTTP 경로는 **기본적으로 세션이 필요**합니다. 예외는 `/`(로그인 전 메인 페이지), `/healthz`, `/login`, `/auth/callback`, `/logout`, 파비콘 3개(공개), `/api/shortcuts/*` 두 경로(API 키 허용), `/api/suggestions/accept`(제안 키 허용)뿐입니다.
 - 인증에 실패하면 `Accept` 에 `text/html` 이 있는 GET(브라우저 주소창)은 `303` 으로 로그인 전 메인 페이지(`/`, `/suggest…` 는 `/?next=<그 주소>`)에 보내고, 그 외에는 `401 {"detail":"로그인이 필요합니다."}` 를 돌려줍니다.
 - 오류 본문은 `{"detail": "..."}` 입니다. 요청 본문 검증 실패는 `422` 입니다.
 - 인증을 통과한 뒤 본문 크기를 검사합니다. 이미지 업로드(`POST /api/presets`)는 5MB, 그 외 모든 요청은 16KB 를 넘으면 `413`, `Content-Length` 없이 chunked 로 보내면 `411` 입니다. 브라우저·단축어·curl 은 `Content-Length` 를 자동으로 보냅니다.
@@ -238,6 +241,7 @@ ESP32 시리얼 모니터(115200)에 `[WebSocket] ✅ 연결 성공!` 이 뜨고
 |--------|----------|------|------|
 | `POST` | `/api/suggestions/apply` | 세션 | 본문 `{"preset_id": "<8자리 hex>", "until": "<ISO 8601>" \| null}`. 프리셋을 적용하고 `until` 에 바꾸기 직전 프리셋으로 돌아가도록 예약. 응답은 활성화 결과 + `revert`(예약 또는 `null`). `until` 이 지났으면 `409`(적용 안 함), 없거나 형식이 틀리거나 24시간 넘게 남았으면 적용만 함. 연속 일정이면 처음 상태를 복귀 대상으로 유지 |
 | `DELETE` | `/api/suggestions/revert` | 세션 | 복귀 예약 취소 → `{"cancelled": true \| false}` |
+| `POST` | `/api/suggestions/accept` | 세션 또는 제안 키 | Teams 카드 [바꾸기]용. 본문 `{"name": "<프리셋 이름>", "until": "<ISO 8601>" \| null}` (`name` 1~100자, 앞뒤 공백 무시). `apply` 와 같은 규칙으로 적용하고, Teams 에 그대로 보낼 **한 줄 문장**(text/plain)을 돌려줌: 바꿨음/유지(연속 일정)/이미 표시 중/끝난 일정/없는 이름 모두 `200`, 시각은 한국 시간 `HH:MM`. 형식 오류만 `422` |
 
 - `until` 은 `Z`·`+09:00` 같은 오프셋을 붙이거나, 없으면 UTC 로 읽습니다. 7자리 소수 초(Power Automate 형식)도 받습니다.
 - 복귀는 그 시각에 **제안한 프리셋이 아직 표시 중일 때만** 합니다. 그 사이 다른 프리셋을 직접 적용하면 예약이 바로 사라집니다. 되돌릴 프리셋이나 제안한 프리셋을 지워도 사라집니다.

@@ -249,6 +249,9 @@ API_KEY = os.environ.get("API_KEY", "").strip()
 # ESP32용 토큰 — /ws 에만 통한다 (비우면 어떤 디바이스도 접속 불가)
 DEVICE_TOKEN = os.environ.get("DEVICE_TOKEN", "").strip()
 
+# Power Automate(Teams 카드의 [바꾸기])용 키 — /api/suggestions/accept 에만 통한다 (비우면 그 경로는 세션 전용)
+SUGGEST_KEY = os.environ.get("SUGGEST_KEY", "").strip()
+
 MIN_SECRET_LENGTH = 24
 
 
@@ -283,13 +286,14 @@ def _validate_auth_config() -> None:
     is_local_http = base.scheme == "http" and base.hostname in ("localhost", "127.0.0.1")
     if not (base.scheme == "https" and base.hostname) and not is_local_http:
         raise RuntimeError("PUBLIC_BASE_URL 은 https:// 로 시작하는 전체 주소여야 합니다.")
-    for name, value in (("API_KEY", API_KEY), ("DEVICE_TOKEN", DEVICE_TOKEN)):
+    for name, value in (("API_KEY", API_KEY), ("DEVICE_TOKEN", DEVICE_TOKEN), ("SUGGEST_KEY", SUGGEST_KEY)):
         if value and len(value) < MIN_SECRET_LENGTH:
             raise RuntimeError(f"{name} 은 {MIN_SECRET_LENGTH}자 이상이어야 합니다.")
 
     # 비밀 값은 생성 명령의 "결과"여야 한다. 공백·따옴표·$( 가 들어 있으면 명령 문자열을
     # 그대로 붙여 넣은 것이므로(공개된 값), 그 상태로 서버가 뜨지 않게 한다.
-    secrets_in_use = {"SESSION_SECRET": SESSION_SECRET, "API_KEY": API_KEY, "DEVICE_TOKEN": DEVICE_TOKEN}
+    secrets_in_use = {"SESSION_SECRET": SESSION_SECRET, "API_KEY": API_KEY, "DEVICE_TOKEN": DEVICE_TOKEN,
+                      "SUGGEST_KEY": SUGGEST_KEY}
     for name, value in secrets_in_use.items():
         if value and not re.fullmatch(r"[A-Za-z0-9._~+/=\-]+", value):
             raise RuntimeError(
@@ -298,7 +302,7 @@ def _validate_auth_config() -> None:
             )
     distinct = [v for v in secrets_in_use.values() if v]
     if len(distinct) != len(set(distinct)):
-        raise RuntimeError("SESSION_SECRET / API_KEY / DEVICE_TOKEN 은 서로 다른 값이어야 합니다.")
+        raise RuntimeError("SESSION_SECRET / API_KEY / DEVICE_TOKEN / SUGGEST_KEY 는 서로 다른 값이어야 합니다.")
 
 
 _validate_auth_config()
@@ -313,6 +317,8 @@ ICON_FILES = {
 PUBLIC_PATHS = frozenset({"/", "/healthz", "/login", "/auth/callback", "/logout", *ICON_FILES})
 # API 키로도 접근 가능한 경로 (그 외 경로는 Google 로그인 세션만 통한다)
 API_KEY_PATHS = frozenset({"/api/shortcuts/names", "/api/shortcuts/activate"})
+# SUGGEST_KEY 로도 접근 가능한 경로 (Power Automate 의 HTTP 동작 — Teams 카드 [바꾸기])
+SUGGEST_KEY_PATHS = frozenset({"/api/suggestions/accept"})
 
 oauth = OAuth()
 if not AUTH_DISABLED:
@@ -1249,8 +1255,11 @@ async def auth_gate(request: Request, call_next):
     path = request.scope["path"]
 
     if not AUTH_DISABLED and path not in PUBLIC_PATHS:
-        authorized = _session_email(request) is not None or (
-            path in API_KEY_PATHS and _secret_matches(_api_key_from(request), API_KEY)
+        key = _api_key_from(request)
+        authorized = (
+            _session_email(request) is not None
+            or (path in API_KEY_PATHS and _secret_matches(key, API_KEY))
+            or (path in SUGGEST_KEY_PATHS and _secret_matches(key, SUGGEST_KEY))
         )
         if not authorized:
             if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
@@ -1979,21 +1988,17 @@ class SuggestionApplyRequest(BaseModel):
     until: Optional[str] = Field(default=None, max_length=MAX_UNTIL_LENGTH)
 
 
-@app.post("/api/suggestions/apply")
-async def apply_suggestion(req: SuggestionApplyRequest):
+async def _apply_suggestion(preset: dict, until_raw: Optional[str]) -> tuple[dict, Optional[str], Optional[dict]]:
     """
-    제안 화면의 [바꾸기]. 프리셋을 적용하고, 일정 종료 시각(until)에 바꾸기 직전 프리셋으로
-    돌아가도록 예약한다. 연속 일정이면 처음 상태를 복귀 대상으로 유지하고 시각만 바꾼다.
+    제안을 적용하고, 일정 종료 시각(until)에 바꾸기 직전 프리셋으로 돌아가도록 예약한다.
+    연속 일정이면 처음 상태를 복귀 대상으로 유지하고 시각만 바꾼다.
     until 이 없거나 형식이 틀리거나 24시간 넘게 남았으면 적용만 한다. 이미 지났으면 409.
+    @return (activate 결과, 바꾸기 직전 프리셋 id, 적용 전의 복귀 예약)
     """
     global pending_revert
 
-    preset = await asyncio.to_thread(get_preset, req.preset_id)
-    if not preset:
-        raise HTTPException(404, "프리셋을 찾을 수 없습니다.")
-
     now = datetime.now(timezone.utc)
-    until = parse_until(req.until) if req.until else None
+    until = parse_until(until_raw) if until_raw else None
     if until is not None and until <= now:
         raise HTTPException(409, "이미 끝난 일정입니다.")
 
@@ -2009,8 +2014,73 @@ async def apply_suggestion(req: SuggestionApplyRequest):
         logger.info(f"📅 제안 적용: '{preset['name']}' — {until.isoformat(timespec='minutes')} 에 복귀 예약")
     else:
         logger.info(f"📅 제안 적용: '{preset['name']}' (복귀 예약 없음)")
+    return result, previous, old
 
+
+@app.post("/api/suggestions/apply")
+async def apply_suggestion(req: SuggestionApplyRequest):
+    """제안 화면의 [바꾸기]. 규칙은 _apply_suggestion 참고."""
+    preset = await asyncio.to_thread(get_preset, req.preset_id)
+    if not preset:
+        raise HTTPException(404, "프리셋을 찾을 수 없습니다.")
+    result, _, _ = await _apply_suggestion(preset, req.until)
     return {**result, "revert": await asyncio.to_thread(_revert_info)}
+
+
+class SuggestionAcceptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=MAX_PRESET_NAME_LENGTH)
+    until: Optional[str] = Field(default=None, max_length=MAX_UNTIL_LENGTH)
+
+
+SUMMARY_TZ = timezone(timedelta(hours=9), "KST")   # 결과 문장의 시각 (한국은 일광 절약 시간이 없다)
+
+
+def _ro(word: str) -> str:
+    """받침이 있으면 "으로", 없거나 ㄹ 받침이면 "로" (한글이 아니면 "(으)로")."""
+    code = ord(word[-1]) - 0xAC00 if word else -1
+    if not 0 <= code <= 11171:
+        return "(으)로"
+    return "로" if code % 28 in (0, 8) else "으로"
+
+
+@app.post("/api/suggestions/accept")
+async def accept_suggestion(req: SuggestionAcceptRequest):
+    """
+    Teams 카드의 [바꾸기] — Power Automate 의 HTTP 동작이 SUGGEST_KEY 로 부른다.
+    프리셋을 이름으로 찾아 /api/suggestions/apply 와 같은 규칙으로 적용하고, 결과를 Teams 에 그대로
+    보낼 한 줄 문장으로 돌려준다 (text/plain, 처리한 경우는 모두 200 — 흐름이 분기 없이 이어지게).
+    """
+    name = req.name.strip()
+    presets = await asyncio.to_thread(load_presets)
+    preset = next((p for p in presets if p["name"].strip() == name), None)
+    if not preset:
+        return PlainTextResponse(f"'{name}' 프리셋이 없습니다. Admin 에서 이름을 확인하세요.")
+    try:
+        result, previous, old = await _apply_suggestion(preset, req.until)
+    except HTTPException as e:
+        if e.status_code == 409:
+            return PlainTextResponse("이미 끝난 일정이라 바꾸지 않았습니다.")
+        raise
+
+    entry = pending_revert
+    back = ""
+    if entry is not None and entry["expected"] == preset["id"]:
+        target = await asyncio.to_thread(get_preset, entry["revert_to"])
+        back_name = target["name"] if target else "이전 상태"
+        back = f" {entry['at'].astimezone(SUMMARY_TZ):%H:%M}에 '{back_name}'{_ro(back_name)} 돌아갑니다."
+
+    shown = preset["name"]
+    if previous != preset["id"]:
+        text = f"'{shown}'{_ro(shown)} 바꿨습니다.{back}"
+    elif back and (old is None or entry is None or old["at"] != entry["at"]):
+        text = f"'{shown}' 상태를 유지합니다.{back}"
+    else:
+        text = f"이미 '{shown}' 상태입니다.{back}"
+    if result.get("deferred"):
+        text += " 잠시 후 화면에 반영됩니다."
+    return PlainTextResponse(text)
 
 
 @app.delete("/api/suggestions/revert")

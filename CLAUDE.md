@@ -60,7 +60,7 @@ CrowPanel 3.7" E-paper
 ### Server (`server/main.py`)
 - **단일 파일 구조**: 모든 API, 인증, WebSocket 핸들러, 이미지·텍스트 렌더링이 `main.py` 하나에 있음
 - **인증은 secure-by-default**: `auth_gate`(`@app.middleware("http")`)가 모든 HTTP 요청을 먼저 검사한다.
-  `PUBLIC_PATHS`(`/`=로그인 전 메인 페이지 `static/login.html`, `/healthz`, `/login`, `/auth/callback`, `/logout`, `ICON_FILES` 의 파비콘 3개)만 무인증, `API_KEY_PATHS`(`/api/shortcuts/names`, `/api/shortcuts/activate`)만 세션 **또는** `X-API-Key`(`Authorization: Bearer` 도 허용), 나머지는 전부 Google 세션 필수. 새 라우트는 아무것도 안 해도 보호된다 — 두 집합에 넣는 것은 의도적 결정일 때만, 상태를 바꾸는 라우트를 API 키에 열지 말 것
+  `PUBLIC_PATHS`(`/`=로그인 전 메인 페이지 `static/login.html`, `/healthz`, `/login`, `/auth/callback`, `/logout`, `ICON_FILES` 의 파비콘 3개)만 무인증, `API_KEY_PATHS`(`/api/shortcuts/names`, `/api/shortcuts/activate`)만 세션 **또는** `X-API-Key`(`Authorization: Bearer` 도 허용), `SUGGEST_KEY_PATHS`(`/api/suggestions/accept`)만 세션 **또는** 같은 헤더의 `SUGGEST_KEY`(`API_KEY` 로는 안 열림), 나머지는 전부 Google 세션 필수. 새 라우트는 아무것도 안 해도 보호된다 — 두 집합에 넣는 것은 의도적 결정일 때만, 상태를 바꾸는 라우트를 API 키에 열지 말 것
 - **`auth_gate` 는 HTTP 미들웨어라 WebSocket 라우트를 덮지 못한다**: `/ws` 핸들러가 `_device_authorized()`(`X-Device-Token`)로 직접 검사하고, 틀리면 accept 전에 close(핸드셰이크 HTTP 403). **앞으로 WebSocket 라우트를 추가하면 반드시 스스로 인증할 것**. 게이트는 라우터와 같은 `request.scope["path"]` 로 경로를 판단한다
 - **비밀 비교**: `_secret_matches`(`hmac.compare_digest`, 기대값이 비어 있으면 항상 거부). `API_KEY` 가 비면 단축어 경로는 세션만, `DEVICE_TOKEN` 이 비면 어떤 디바이스도 접속 불가
 - **세션**: 로그인 후 `request.session["email"]` 만 저장(Google 토큰은 저장 안 함). `_session_email` 이 요청마다 `ALLOWED_EMAILS` 를 다시 검사한다. `/auth/callback` 은 `email_verified is True` + 소문자 이메일 일치일 때만 세션 발급(Authlib 이 state·nonce·PKCE S256·id_token 서명을 검증). 쿠키 `eink_session`, SameSite=Lax, `PUBLIC_IS_HTTPS`(스킴 대소문자 무시) 면 Secure, 30일. 세션은 서버에 저장되지 않는 서명 쿠키이므로 개별 삭제 대신 **세션 세대**(`session_generation`, `secrets.randbits(53)`)로 폐기한다: 로그인 시 `session["gen"]` 에 현재 세대를 넣고, `_session_email` 은 `gen` 이 서버의 현재 세대와 같을 때만 받아들인다(서명·30일·`ALLOWED_EMAILS` 검사에 더해). `POST /logout` 은 **유효한 세션이 있을 때만** 세대를 새 무작위 값으로 바꿔 저장한다(다른 기기·복사된 쿠키·다른 허용 계정 포함 전부 폐기, 세션 없는 교차 사이트 POST 는 아무것도 못 바꿈). 판정이 시계와 무관하다(시각 비교를 도입하지 말 것). **fail closed**: 세대의 기본값이 무작위라 `state.json` 을 잃거나 깨지면 시작할 때 새 세대가 정해져 옛 쿠키가 모두 거부되고 모두 한 번 다시 로그인할 뿐이다. `restore_state()` 가 저장된 세대(`state.json` 의 `session_generation`)가 있으면 이어 쓰고 lifespan 이 시작 직후 저장한다. 오래된 백업을 복원하면 옛 세대가 돌아와 그 세대로 발급된 쿠키가 다시 유효해질 수 있으므로 복원 뒤 로그인→로그아웃 한 번 또는 `SESSION_SECRET` 교체. 로그아웃의 저장이 실패하면 500 "로그아웃 저장 실패" 페이지로 `SESSION_SECRET` 교체를 안내한다. 콜백의 오류 분기(OAuthError·예외)는 기존 세션을 **지우지 않는다** — `/auth/callback?error=x` 로의 교차 사이트 이동으로 도달할 수 있어 지우면 강제 로그아웃 수단이 된다. state 검증을 통과해 Google 로그인을 마친 뒤 허용되지 않은 계정일 때만 `session.clear()`. `/login` 이 Google 설정 문서를 못 받으면 502 안내 페이지
@@ -77,7 +77,7 @@ CrowPanel 3.7" E-paper
 - **본문 크기·업로드 검증 순서**: `auth_gate` 가 인증을 먼저 확인한 뒤 `Transfer-Encoding`(chunked) 은 411, Content-Length 가 한도(`POST /api/presets` 는 5MB+64KB, 그 외 전부 `MAX_JSON_BODY_SIZE` 16KB)를 넘거나 숫자가 아니면 본문 수신 전에 413 → 엔드포인트가 파일을 청크로 읽어 메모리 상한 유지 → `Image.open` 헤더로 픽셀 수 검사(24MP 초과 400) → `convert("RGB")`. 순서를 바꾸면 메모리/디스크 고갈 공격에 노출됨
 - **`python main.py` 로 실행할 때만 적용되는 것**: `SERVER_HOST`/`SERVER_PORT`/`SERVER_RELOAD`, `ws_max_size`(64KB), `proxy_headers` + `forwarded_allow_ips="127.0.0.1"`(Caddy 의 `X-Forwarded-*`)
 - **이미지 파이프라인**: 업로드 → letterbox 리사이즈(416x240) → Floyd-Steinberg 디더링(`img.convert("1")`) → 회전/반전 → byte packing. 단순 threshold 변환하면 이모지/컬러 디테일이 날아가므로 반드시 디더링 사용
-- **일정 제안·복귀 예약**: Power Automate(회사)가 Teams 로 `/suggest?preset=<이름>&until=<종료 시각>` 링크를 보낸다(서버는 일정을 읽지 않는다 — `docs/power-automate.md`). `GET /suggest`(화면만, `static/suggest.html`) → `POST /api/suggestions/apply` 가 적용하고 `pending_revert`(`{revert_to, expected, at}`, 하나뿐, state.json 저장)를 건다. 활성화 본체는 `_activate_core(preset, force, expected_current)` — 교체 직전 ID 를 돌려주고, `expected_current` 가 현재와 다르면 아무것도 안 바꾸며, 교체 후 현재가 `expected` 와 다르면 예약을 지운다. 세 판단 모두 `_activate_lock` 안. 복귀 대상은 연속 일정이면 처음 상태(`old.revert_to`)를 유지. 타이머(`_revert_task`)는 lifespan 이 복원 직후 걸고(지난 시각이면 즉시) 종료 시 끈다. `until` 은 `parse_until`(정규식, 오프셋 없으면 UTC, 64자, 24시간 이내만 예약, 지난 시각 409) — `fromisoformat` 으로 바꾸지 말 것(3.10)
+- **일정 제안·복귀 예약**: Power Automate(회사)가 Teams 로 `/suggest?preset=<이름>&until=<종료 시각>` 링크를 보낸다(서버는 일정을 읽지 않는다 — `docs/power-automate.md`). `GET /suggest`(화면만, `static/suggest.html`) → `POST /api/suggestions/apply` 가 적용하고 `pending_revert`(`{revert_to, expected, at}`, 하나뿐, state.json 저장)를 건다. 활성화 본체는 `_activate_core(preset, force, expected_current)` — 교체 직전 ID 를 돌려주고, `expected_current` 가 현재와 다르면 아무것도 안 바꾸며, 교체 후 현재가 `expected` 와 다르면 예약을 지운다. 세 판단 모두 `_activate_lock` 안. 복귀 대상은 연속 일정이면 처음 상태(`old.revert_to`)를 유지. 타이머(`_revert_task`)는 lifespan 이 복원 직후 걸고(지난 시각이면 즉시) 종료 시 끈다. `until` 은 `parse_until`(정규식, 오프셋 없으면 UTC, 64자, 24시간 이내만 예약, 지난 시각 409) — `fromisoformat` 으로 바꾸지 말 것(3.10). Teams 카드 [바꾸기]는 `POST /api/suggestions/accept`(`SUGGEST_KEY`, 이름으로 찾음)가 같은 `_apply_suggestion` 을 쓰고, 결과를 Teams 에 그대로 보낼 한 줄 문장(text/plain, 처리한 경우 모두 200 — Power Automate 흐름이 분기 없이 이어지게, 시각은 `SUMMARY_TZ` KST)으로 돌려준다
 - **로그인 후 복귀(`next`)**: 미인증 브라우저 `GET /suggest…` 만 `/?next=<주소>` 로 보낸다. `/` 의 버튼(login.html JS) → `/login?next=` → `session["next"]` → 콜백 성공 시 `session.clear()` 전에 꺼내 그리로 303. 모든 지점에서 `_safe_next`(`NEXT_RE` = `/admin`·`/suggest` 만, 1024자)로 다시 검사 — 허용 목록을 넓히거나 절대 URL 을 받지 말 것(open redirect)
 - **Apple 단축어 연동**: `/api/shortcuts/names`가 plain text 줄바꿈 목록 반환 → iOS JSON 파싱 버그 회피 구조. 요청 본문은 `{"name"(1~100자), "force"?}`
 
@@ -110,7 +110,7 @@ CrowPanel 3.7" E-paper
 | Limits | 이름 100자 / 프리셋 200개 / 디바이스 이력 20 / 동시 디바이스 연결 4 | `MAX_PRESET_NAME_LENGTH`, `MAX_PRESETS`, `MAX_KNOWN_DEVICES`, `MAX_DEVICE_CONNECTIONS` |
 | Request body | JSON 16KB (업로드 제외) | `MAX_JSON_BODY_SIZE` |
 | Push interval | 3초 | `MIN_PUSH_INTERVAL` (env), `STATE_PERSIST_DELAY` 2초 |
-| Secrets | `SESSION_SECRET` ≥32자, `API_KEY`/`DEVICE_TOKEN` ≥24자 | 시작 시 검사 |
+| Secrets | `SESSION_SECRET` ≥32자, `API_KEY`/`DEVICE_TOKEN`/`SUGGEST_KEY` ≥24자, 서로 달라야 함 | 시작 시 검사 |
 | Session | 30일 | `SESSION_MAX_AGE` |
 | Suggest | until 64자 / 복귀 예약 24시간 이내 / next 1024자 | `MAX_UNTIL_LENGTH`, `MAX_REVERT_AHEAD`, `MAX_NEXT_LENGTH` |
 
@@ -120,7 +120,7 @@ CrowPanel 3.7" E-paper
 - `SERVER_HOST`(기본 `0.0.0.0`, 프록시 뒤 `127.0.0.1`), `SERVER_PORT`(`5000`), `SERVER_RELOAD`(`false`, 개발에서만 true)
 - `AUTH_DISABLED` — true 면 인증·OAuth 변수·`/ws` 토큰 모두 불필요. **로컬 개발 전용**이며 `PUBLIC_BASE_URL=https://...` 와 함께면 시작을 거부
 - `PUBLIC_BASE_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ALLOWED_EMAILS`(쉼표 구분), `SESSION_SECRET` — 인증 사용 시 필수
-- `API_KEY`(단축어용, `/api/shortcuts/*` 에만 통함), `DEVICE_TOKEN`(ESP32용, `/ws` 에만 통함) — 비우면 각각 세션 전용 / 디바이스 접속 불가
+- `API_KEY`(단축어용, `/api/shortcuts/*` 에만 통함), `DEVICE_TOKEN`(ESP32용, `/ws` 에만 통함), `SUGGEST_KEY`(Power Automate HTTP 동작용, `/api/suggestions/accept` 에만 통함) — 비우면 각각 세션 전용 / 디바이스 접속 불가
 - `FONT_PATH` — 텍스트 프리셋 한글 폰트 경로(없으면 Nanum/Noto CJK/macOS 폰트 자동 탐색)
 - `MIN_PUSH_INTERVAL` — 패널로 프레임을 보내는 최소 간격(초, 기본 `3`). 연타는 합쳐서 마지막 상태만 전송
 

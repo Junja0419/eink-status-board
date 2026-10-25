@@ -195,7 +195,7 @@ Audience 설정, 계정 제한 방식, 문제 해결은 **[google-oauth.md](goog
 명령어가 아니라 **출력된 값**을 넣어야 합니다. (공백·따옴표·괄호가 섞인 값이나 서로 같은 값은 서버가 시작을 거부합니다)
 
 ```bash
-python3 -c 'import secrets; print("\n".join(f"{k}={secrets.token_urlsafe(32)}" for k in ("SESSION_SECRET","API_KEY","DEVICE_TOKEN")))'
+python3 -c 'import secrets; print("\n".join(f"{k}={secrets.token_urlsafe(32)}" for k in ("SESSION_SECRET","API_KEY","DEVICE_TOKEN","SUGGEST_KEY")))'
 ```
 
 출력된 세 줄을 복사해 두고 `.env` 를 만듭니다. `<...>` 자리표시자는 실제 값으로 바꿉니다.
@@ -217,6 +217,7 @@ ALLOWED_EMAILS=you@gmail.com
 SESSION_SECRET=<위에서 출력된 값>
 API_KEY=<위에서 출력된 값>
 DEVICE_TOKEN=<위에서 출력된 값 — 펌웨어의 DEVICE_TOKEN 과 같아야 함>
+SUGGEST_KEY=<위에서 출력된 값 — Teams 카드 버튼을 쓸 때만, Power Automate HTTP 동작의 X-API-Key>
 ```
 
 | 변수 | 설명 |

@@ -16,6 +16,7 @@ Outlook 일정 ─(시작 5분 전)→ Power Automate ─→ Teams 메시지 ─
 ## 목차
 
 1. [흐름 A — 일정 시작 전 제안](#흐름-a--일정-시작-전-제안)
+   - [버튼 카드로 바로 적용 (HTTP)](#버튼-카드로-바로-적용-http)
 2. [흐름 B — 시간대 제안 (선택)](#흐름-b--시간대-제안-선택)
 3. [Teams 가 막혀 있을 때 — 메일로 받기](#teams-가-막혀-있을-때--메일로-받기)
 4. [키워드 바꾸기](#키워드-바꾸기)
@@ -73,6 +74,50 @@ if(equals(triggerBody()?['value'], null), createArray(triggerBody()), triggerBod
 <p><a href="@{outputs('Link')}">바꾸기 화면 열기</a></p>
 ```
 
+### 버튼 카드로 바로 적용 (HTTP)
+
+흐름 A 의 6번(메시지 게시) 대신 아래 6~9번을 쓰면 Teams 카드의 **[바꾸기]** 한 번으로 바로 적용됩니다(브라우저가 열리지 않음).
+Power Automate 의 **HTTP** 동작(Premium)이 필요하고, 서버 `.env` 에 `SUGGEST_KEY` 가 있어야 합니다.
+
+| # | 동작 | 설정 |
+|---|------|------|
+| 6 | (3 안) **Post adaptive card and wait for a response** (Microsoft Teams, 한국어 화면: 적응형 카드를 게시하고 응답 대기) | Post as `Flow bot` · Post in `Chat with Flow bot` · Recipient 내 회사 이메일 · Message: 아래 ⑤ · Update message: `응답을 받았습니다` · 동작 **설정**의 **시간 제한**: `PT2H` |
+| 7 | (3 안) **Condition** (컨트롤, 한국어 화면: 조건) | 왼쪽: 동적 콘텐츠에서 6번의 **submitActionId** · `같음` · 오른쪽: `apply` |
+| 8 | (예인 경우) **HTTP** | 방법 `POST` · URI `https://<도메인>/api/suggestions/accept` · 헤더 `X-API-Key` = `SUGGEST_KEY` 값, `Content-Type` = `application/json` · 본문: 아래 ⑥ · 동작 **설정**에서 **보안 입력**·**보안 출력** 켜기(실행 기록에 키가 남지 않게) |
+| 9 | (예인 경우) **Post message in a chat or channel** | 6번과 같은 대상 · Message: 동적 콘텐츠에서 8번의 **본문(Body)** |
+
+⑤ 카드 — 그대로 붙여넣습니다. 제목의 `"`·`\` 는 카드 형식을 깨므로 지웁니다(식 안에서 `decodeUriComponent` 로 표기):
+
+```json
+{
+  "type": "AdaptiveCard",
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "version": "1.4",
+  "body": [
+    {
+      "type": "TextBlock", "weight": "Bolder", "wrap": true,
+      "text": "@{convertTimeZone(item()?['start'], 'UTC', 'Korea Standard Time', 'HH:mm')} @{replace(replace(coalesce(item()?['subject'], ''), decodeUriComponent('%5C'), '/'), decodeUriComponent('%22'), '')}"
+    },
+    { "type": "TextBlock", "wrap": true, "text": "'@{outputs('Preset')}'(으)로 바꾸시겠어요?" }
+  ],
+  "actions": [
+    { "type": "Action.Submit", "id": "apply", "title": "바꾸기" },
+    { "type": "Action.Submit", "id": "skip", "title": "무시" },
+    { "type": "Action.OpenUrl", "title": "다른 프리셋", "url": "@{outputs('Link')}" }
+  ]
+}
+```
+
+⑥ HTTP 본문:
+
+```json
+{ "name": "@{outputs('Preset')}", "until": "@{item()?['endWithTimeZone']}" }
+```
+
+- 서버는 처리한 경우 모두 `200` 과 한 줄 문장을 돌려줍니다 — 예: `'회의 중'으로 바꿨습니다. 15:00에 '근무 중'으로 돌아갑니다.`, `'회의 중' 상태를 유지합니다. …`(연속 일정), `이미 '회의 중' 상태입니다.`, `이미 끝난 일정이라 바꾸지 않았습니다.`, `'…' 프리셋이 없습니다. …`. 9번은 그 문장을 그대로 보냅니다.
+- [무시] 를 누르면 7번이 아니오로 끝나고 아무것도 바뀌지 않습니다. 2시간 안에 응답이 없으면 그 실행은 시간 초과로 끝나며(실행 기록에 실패로 보임) 정상입니다.
+- `SUGGEST_KEY` 는 이 경로에만 통합니다. 단축어용 `API_KEY` 를 넣으면 `401` 입니다. 키를 바꾸려면 서버 `.env` 를 고치고 재시작한 뒤 8번 헤더도 바꿉니다.
+
 ## 흐름 B — 시간대 제안 (선택)
 
 점심처럼 일정에 없는 반복 시간대용입니다. **예약된 클라우드 흐름**으로 만듭니다.
@@ -117,6 +162,8 @@ if(equals(triggerBody()?['value'], null), createArray(triggerBody()), triggerBod
 | 메시지 게시 실패 `convertFromUtc … expects … a UTC date time` | 트리거의 `start`·`end` 는 끝에 `Z` 가 없어 `convertFromUtc` 가 거부함 — ④ 처럼 `convertTimeZone(…, 'UTC', 'Korea Standard Time', 'HH:mm')` 을 쓰세요 |
 | 메시지에 `if(contains(…` 나 `concat('https://…` 가 글자 그대로 보임 | Compose 입력에 `@{ }` 없이 식만 넣었음 — ②·③ 을 `@{ }` 로 감싼 그대로 다시 붙여넣으세요 |
 | 메시지에 `<p>`·`<b>` 태그가 보임 | 메시지를 일반 보기에 붙여넣었음 — `</>`(코드 보기)에서 붙여넣거나, 태그 없이 세 줄로 쓰세요(주소는 Teams 가 자동으로 링크로 만듦) |
+| 8번 HTTP 가 `401` | 헤더 이름이 `X-API-Key` 가 아니거나, 값이 서버 `.env` 의 `SUGGEST_KEY` 와 다르거나(단축어용 `API_KEY` 가 아님), 서버에 `SUGGEST_KEY` 가 없음 |
+| 8번 HTTP 가 `422` | 본문 JSON 형식이 틀림 — ⑥ 을 그대로 쓰고, `name` 이 비어 있지 않은지 확인 |
 | 6번 동작 실패 `BotNotInConversationRoster` 등 | Flow bot(Workflows 앱) 차단 — [메일로 받기](#teams-가-막혀-있을-때--메일로-받기) |
 | 링크를 열면 로그인 화면 | Teams 가 링크를 앱 안의 브라우저로 열면 Chrome 의 로그인 상태를 쓰지 못합니다. 한 번 로그인하면 원래 제안 화면으로 돌아오고, 그 브라우저에는 30일간 유지됩니다. 로그인이 막히면 "브라우저에서 열기" 로 Chrome 에서 여세요 |
 | "프리셋이 없습니다" | ② 의 이름과 Admin 의 프리셋 이름이 다름 (띄어쓰기 포함) |
