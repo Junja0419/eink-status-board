@@ -31,13 +31,15 @@ Outlook 일정 ─(시작 5분 전)→ Power Automate ─→ Teams 메시지 ─
 | 1 | 트리거 **When an upcoming event is starting soon (V3)** (Office 365 Outlook) | Calendar Id: `Calendar`(기본 일정) · Look-Ahead Time: `5` |
 | 2 | **Filter array** (데이터 작업, 한국어 화면: 배열 필터링) | From: 아래 ⓪ 을 **fx(식)** 로 · 고급 모드 식: 아래 ① |
 | 3 | **Apply to each** (컨트롤, 한국어 화면: 각각에 적용) | 이전 단계에서 출력 선택: 동적 콘텐츠에서 2번 동작의 **본문(Body)** |
-| 4 | (3 안) **Compose**(데이터 작업, 한국어 화면: 작성) — 이름을 `Preset` 으로 | 입력: 아래 ② 를 **fx** 로 (보라색 식 토큰이 생겨야 함) |
-| 5 | (3 안) **Compose** — 이름을 `Link` 로 | 입력: 아래 ③ 을 **fx** 로 |
+| 4 | (3 안) **Compose**(데이터 작업, 한국어 화면: 작성) — 이름을 `Preset` 으로 (`…` → 이름 바꾸기) | 입력: 아래 ② 를 그대로 붙여넣기 |
+| 5 | (3 안) **Compose** — 이름을 `Link` 로 | 입력: 아래 ③ 을 그대로 붙여넣기 |
 | 6 | (3 안) **Post message in a chat or channel** (Microsoft Teams) | Post as: `Flow bot` · Post in: `Chat with Flow bot` · Recipient: 내 회사 이메일 · Message: 아래 ④ |
 
-> **식 넣는 법**: ⓪·②·③ 은 입력칸의 **fx** 탭에 `@{ }` 없이 넣습니다. `@{식}` 형태로 글 칸에 넣으면 결과가 **문자열**로 바뀌어
-> 배열 필터링이 `The 'from' property value … is of type 'String'` 으로 실패합니다. `@{ }` 는 ④ 처럼 글 안에 값을 끼워 넣을 때만 씁니다.
+> **식 넣는 법**: ⓪ 은 입력칸의 **fx** 탭에 `@{ }` 없이 넣습니다 — `@{식}` 은 결과를 **문자열**로 바꾸므로 배열이 필요한
+> From 에 쓰면 `The 'from' property value … is of type 'String'` 으로 실패합니다.
+> ②·③·④ 는 결과가 글자라 `@{ }` 로 감싼 그대로 붙여넣으면 됩니다(감싸지 않고 글 칸에 넣으면 식이 글자 그대로 나갑니다).
 > 한국어 화면에서는 동작 기본 이름이 영어와 달라 `body('Filter_array')` 같은 이름 참조가 틀릴 수 있으니, 이전 단계 값은 동적 콘텐츠에서 고릅니다.
+> ③ 의 `outputs('Preset')` 은 4번 동작 이름이 정확히 `Preset` 일 때만 동작합니다.
 
 ⓪ From — 트리거의 **Split On** 설정(일정마다 따로 실행 / 목록으로 한 번에)과 상관없이 배열로 맞춥니다:
 
@@ -54,13 +56,13 @@ if(equals(triggerBody()?['value'], null), createArray(triggerBody()), triggerBod
 ② 제목 키워드 → 프리셋 이름 (Admin 에 있는 이름과 **글자까지 같아야** 합니다):
 
 ```
-if(contains(toLower(coalesce(item()?['subject'], '')), '점심'), '점심 식사', if(contains(toLower(coalesce(item()?['subject'], '')), '외근'), '외근 중', '회의 중'))
+@{if(contains(toLower(coalesce(item()?['subject'], '')), '점심'), '점심 식사', if(contains(toLower(coalesce(item()?['subject'], '')), '외근'), '외근 중', '회의 중'))}
 ```
 
 ③ 링크 — `<도메인>` 을 내 서버 주소로 바꿉니다. 종료 시각은 반드시 **`endWithTimeZone`** (오프셋이 붙은 값)을 씁니다:
 
 ```
-concat('https://<도메인>/suggest?preset=', encodeUriComponent(outputs('Preset')), '&until=', encodeUriComponent(item()?['endWithTimeZone']))
+@{concat('https://<도메인>/suggest?preset=', encodeUriComponent(outputs('Preset')), '&until=', encodeUriComponent(item()?['endWithTimeZone']))}
 ```
 
 ④ Teams 메시지 — 메시지 칸 도구 모음의 **`</>`(코드 보기)** 를 켜고 붙여넣습니다. 일반 보기에 넣으면 `<p>` 같은 태그가 글자 그대로 보입니다:
@@ -113,7 +115,7 @@ concat('https://<도메인>/suggest?preset=', encodeUriComponent(outputs('Preset
 | 메시지가 안 옴 | 실행 기록이 없으면 트리거가 안 돈 것 — Calendar Id 가 기본 일정인지 확인. Microsoft 는 드물게 트리거가 최대 1시간 늦을 수 있다고 안내합니다 |
 | 배열 필터링 실패 `The 'from' property value … is of type 'String'` | From 에 `@{…}` 로 넣어 문자열이 됐음 — ⓪ 을 fx 탭에 `@{}` 없이 다시 넣으세요 |
 | 메시지 게시 실패 `convertFromUtc … expects … a UTC date time` | 트리거의 `start`·`end` 는 끝에 `Z` 가 없어 `convertFromUtc` 가 거부함 — ④ 처럼 `convertTimeZone(…, 'UTC', 'Korea Standard Time', 'HH:mm')` 을 쓰세요 |
-| 메시지에 `if(contains(…` 나 `concat('https://…` 가 글자 그대로 보임 | Compose 입력을 글 칸에 넣었음 — ②·③ 을 **fx** 탭으로 다시 넣으세요 |
+| 메시지에 `if(contains(…` 나 `concat('https://…` 가 글자 그대로 보임 | Compose 입력에 `@{ }` 없이 식만 넣었음 — ②·③ 을 `@{ }` 로 감싼 그대로 다시 붙여넣으세요 |
 | 메시지에 `<p>`·`<b>` 태그가 보임 | 메시지를 일반 보기에 붙여넣었음 — `</>`(코드 보기)에서 붙여넣거나, 태그 없이 세 줄로 쓰세요(주소는 Teams 가 자동으로 링크로 만듦) |
 | 6번 동작 실패 `BotNotInConversationRoster` 등 | Flow bot(Workflows 앱) 차단 — [메일로 받기](#teams-가-막혀-있을-때--메일로-받기) |
 | 링크를 열면 로그인 화면 | Teams 가 링크를 앱 안의 브라우저로 열면 Chrome 의 로그인 상태를 쓰지 못합니다. 한 번 로그인하면 원래 제안 화면으로 돌아오고, 그 브라우저에는 30일간 유지됩니다. 로그인이 막히면 "브라우저에서 열기" 로 Chrome 에서 여세요 |
