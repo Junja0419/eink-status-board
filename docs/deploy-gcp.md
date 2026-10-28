@@ -188,17 +188,17 @@ Audience 설정, 계정 제한 방식, 문제 해결은 **[google-oauth.md](goog
 
 ## 8. 서버 환경변수 (.env)
 
-`~/eink-status-board/server/.env` 를 **600 권한**으로 만듭니다. 비밀 값 네 개(`SESSION_SECRET`, `API_KEY`, `DEVICE_TOKEN`, `SUGGEST_KEY`)는 아래 명령이 자동으로 생성합니다.
+`~/eink-status-board/server/.env` 를 **600 권한**으로 만듭니다. 비밀 값 다섯 개(`SESSION_SECRET`, `API_KEY`, `DEVICE_TOKEN`, `SUGGEST_KEY`, `APP_KEY`)는 아래 명령이 자동으로 생성합니다.
 `<도메인>`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ALLOWED_EMAILS` 는 직접 채우세요.
 
-먼저 비밀 값 네 개를 **생성해서 출력**합니다. `.env` 파일 안에서는 `$(...)` 같은 명령이 실행되지 않으므로,
+먼저 비밀 값 다섯 개를 **생성해서 출력**합니다. `.env` 파일 안에서는 `$(...)` 같은 명령이 실행되지 않으므로,
 명령어가 아니라 **출력된 값**을 넣어야 합니다. (공백·따옴표·괄호가 섞인 값이나 서로 같은 값은 서버가 시작을 거부합니다)
 
 ```bash
-python3 -c 'import secrets; print("\n".join(f"{k}={secrets.token_urlsafe(32)}" for k in ("SESSION_SECRET","API_KEY","DEVICE_TOKEN","SUGGEST_KEY")))'
+python3 -c 'import secrets; print("\n".join(f"{k}={secrets.token_urlsafe(32)}" for k in ("SESSION_SECRET","API_KEY","DEVICE_TOKEN","SUGGEST_KEY","APP_KEY")))'
 ```
 
-출력된 네 줄을 복사해 두고 `.env` 를 만듭니다. `<...>` 자리표시자는 실제 값으로 바꿉니다.
+출력된 다섯 줄을 복사해 두고 `.env` 를 만듭니다. `<...>` 자리표시자는 실제 값으로 바꿉니다.
 (`nano` 가 `Error opening terminal` 로 실패하면 `TERM=xterm-256color nano .env` 로 실행하세요)
 
 ```bash
@@ -217,7 +217,8 @@ ALLOWED_EMAILS=you@gmail.com
 SESSION_SECRET=<위에서 출력된 값>
 API_KEY=<위에서 출력된 값>
 DEVICE_TOKEN=<위에서 출력된 값 — 펌웨어의 DEVICE_TOKEN 과 같아야 함>
-SUGGEST_KEY=<위에서 출력된 값 — Teams 카드 버튼을 쓸 때만, Power Automate HTTP 동작의 X-API-Key>
+SUGGEST_KEY=<위에서 출력된 값 — Power Automate HTTP 동작을 쓸 때만, 그 동작의 X-API-Key>
+APP_KEY=<위에서 출력된 값 — Mac 알림 앱을 쓸 때만, 앱 설정에 넣는 키>
 ```
 
 | 변수 | 설명 |
@@ -228,13 +229,14 @@ SUGGEST_KEY=<위에서 출력된 값 — Teams 카드 버튼을 쓸 때만, Powe
 | `SESSION_SECRET` | 세션 쿠키 서명 키 (32자 이상) |
 | `API_KEY` | Apple 단축어용. `/api/shortcuts/*` 에만 통합니다 (24자 이상) |
 | `DEVICE_TOKEN` | ESP32 용. **펌웨어의 `DEVICE_TOKEN` 과 같은 값**이어야 합니다 (24자 이상) |
-| `SUGGEST_KEY` | Power Automate(Teams 카드의 [바꾸기])용. `/api/suggestions/accept` 에만 통합니다 (24자 이상) |
+| `SUGGEST_KEY` | Power Automate(HTTP 동작)용. `/api/suggestions/notify`·`/api/suggestions/accept` 에만 통합니다 (24자 이상) |
+| `APP_KEY` | Mac 알림 앱용. `/ws/app`·`/api/suggestions/apply` 에만 통합니다 (24자 이상) |
 
 - `SERVER_RELOAD` 는 넣지 않습니다 (기본값 `false`). 운영에서 자동 재시작은 꺼 둡니다.
 - `AUTH_DISABLED` 도 넣지 않습니다. 개발용 스위치가 남아 있으면 `PUBLIC_BASE_URL=https://...` 와 충돌해 서버가 시작을 거부합니다. `PUBLIC_BASE_URL` 은 `https://` 주소여야 합니다.
 - 전체 변수 목록과 기본값은 [README 설정 절](../README.md#설정)에 있습니다.
 - `.env` 에는 비밀이 들어 있습니다. 저장소에 커밋하지 마세요 (`.gitignore` 에 등록되어 있습니다).
-- 단축어·펌웨어·Power Automate 에 넣을 값은 서버에서 확인합니다: `grep -E '^(API_KEY|DEVICE_TOKEN|SUGGEST_KEY)=' ~/eink-status-board/server/.env`
+- 단축어·펌웨어·Power Automate·Mac 앱에 넣을 값은 서버에서 확인합니다: `grep -E '^(API_KEY|DEVICE_TOKEN|SUGGEST_KEY|APP_KEY)=' ~/eink-status-board/server/.env`
 
 ## 9. systemd 서비스 등록
 
@@ -361,7 +363,7 @@ journalctl -u eink-status-board -f
 | 경로 | 내용 |
 |------|------|
 | `server/data/` | `presets.json`, `images/`, `state.json` (프리셋 전체 + 마지막 활성 프리셋 + 세션 세대 값 + 디바이스 이력). 손상 시 자동 보관된 `presets.json.corrupt-*` 도 이 폴더에 있음 |
-| `server/.env` | 모든 비밀 값 (OAuth secret, SESSION_SECRET, API_KEY, DEVICE_TOKEN, SUGGEST_KEY) |
+| `server/.env` | 모든 비밀 값 (OAuth secret, SESSION_SECRET, API_KEY, DEVICE_TOKEN, SUGGEST_KEY, APP_KEY) |
 
 ```bash
 cd ~/eink-status-board
@@ -387,7 +389,8 @@ Caddy 의 인증서는 백업하지 않아도 새 서버에서 자동으로 다�
 | `GOOGLE_CLIENT_SECRET` | `.env` | Google 인가 코드 교환 | 이것만으로는 로그인할 수 없음 (Google 계정 인증은 여전히 필요). 서버를 사칭하는 가짜 로그인 앱에 악용될 수 있음 | 콘솔에서 새 secret → `.env` → 재시작 → 이전 secret 비활성화 |
 | `API_KEY` | `.env`, iPhone 단축어 | `/api/shortcuts/names`, `/api/shortcuts/activate` **만** | 프리셋 이름 조회, 프리셋 활성화(`force` 포함). 최악의 경우에도 표시 화면을 바꾸는 것까지이며, 패널 갱신은 `MIN_PUSH_INTERVAL`(3초)당 최대 한 번. 업로드·삭제·이름 변경·Admin·상태 조회는 불가 | 새 값 + 재시작 + 단축어의 헤더 갱신 |
 | `DEVICE_TOKEN` | `.env`, 펌웨어 | `/ws` **만** | 최악의 경우: 프레임을 받아 볼 수 있음(현재 화면 내용), 동시 연결 4개 슬롯을 모두 점유해 정상 디바이스의 접속을 막을 수 있음, 디바이스 보고 필드(`fw`, `rssi` 등)를 써서 목록을 오염시킬 수 있음. 화면을 바꿀 수는 없음 | 새 값 + 재시작 + **펌웨어의 `DEVICE_TOKEN` 도 바꿔 USB 재업로드** |
-| `SUGGEST_KEY` | `.env`, Power Automate 흐름 | `/api/suggestions/accept` **만** | 이름으로 프리셋 활성화와 일정 종료 복귀 예약(24시간 이내). 화면을 바꾸는 것까지이며 업로드·삭제·Admin·상태 조회는 불가 | 새 값 + 재시작 + 흐름의 HTTP 동작 헤더 갱신 |
+| `SUGGEST_KEY` | `.env`, Power Automate 흐름 | `/api/suggestions/notify`, `/api/suggestions/accept` **만** | Mac 앱에 가짜 제안 알림 보내기, 이름으로 프리셋 활성화와 일정 종료 복귀 예약(24시간 이내). 화면을 바꾸는 것까지이며 업로드·삭제·Admin·상태 조회는 불가 | 새 값 + 재시작 + 흐름의 HTTP 동작 헤더 갱신 |
+| `APP_KEY` | `.env`, 회사 Mac 의 키체인(Status Board 앱) | `/ws/app`, `/api/suggestions/apply` **만** | 제안 알림 엿보기(일정 제목 포함), ID 로 프리셋 활성화와 복귀 예약. 업로드·삭제·Admin·상태 조회는 불가 | 새 값 + 재시작 + 앱의 설정에서 키 갱신 |
 | DuckDNS 토큰 | `~/duckdns/token.env` (600) | 도메인의 IP 변경 | 도메인을 가로채 인증서를 발급받고 API 키·디바이스 토큰을 훔칠 수 있음 | duckdns.org 에서 토큰 재생성 → `token.env` 갱신 |
 
 **교체 절차**

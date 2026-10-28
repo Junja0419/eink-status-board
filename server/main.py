@@ -53,6 +53,7 @@ import re
 import secrets
 import tempfile
 import time
+import unicodedata
 import uuid as uuid_lib
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -67,6 +68,8 @@ from fastapi import (
     FastAPI, File, Form, HTTPException, Request, UploadFile,
     WebSocket, WebSocketDisconnect,
 )
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
     FileResponse, HTMLResponse, JSONResponse, PlainTextResponse,
     RedirectResponse, Response,
@@ -202,6 +205,12 @@ UNTIL_RE = re.compile(
 )
 MAX_UNTIL_LENGTH = 64
 MAX_REVERT_AHEAD = 24 * 3600          # 복귀 예약은 24시간 안쪽 일정만
+# macOS 알림 앱(/ws/app) — 동시 연결 수, 다시 보내려고 들고 있는 제안 수, until 이 없는 제안의 유효 시간(초)
+MAX_APP_CONNECTIONS = 4
+MAX_PENDING_SUGGESTIONS = 20
+SUGGESTION_DEFAULT_TTL = 3600
+MAX_SUBJECT_INPUT = 1000             # Power Automate 가 보내는 일정 제목 — 받는 한도
+MAX_SUBJECT_SHOWN = 120              # 알림에 보이는 길이 (넘으면 자르고 … )
 # 로그인 후 돌아갈 수 있는 주소 — 허용 목록 (open redirect 방지)
 NEXT_RE = re.compile(r"/(?:admin|suggest)(?:\?[^#\\\s]*)?")
 MAX_NEXT_LENGTH = 1024                # 세션 쿠키(4KB)에 들어가므로 짧게
@@ -249,8 +258,11 @@ API_KEY = os.environ.get("API_KEY", "").strip()
 # ESP32용 토큰 — /ws 에만 통한다 (비우면 어떤 디바이스도 접속 불가)
 DEVICE_TOKEN = os.environ.get("DEVICE_TOKEN", "").strip()
 
-# Power Automate(Teams 카드의 [바꾸기])용 키 — /api/suggestions/accept 에만 통한다 (비우면 그 경로는 세션 전용)
+# Power Automate(HTTP 동작)용 키 — SUGGEST_KEY_PATHS 에만 통한다 (비우면 그 경로들은 세션 전용)
 SUGGEST_KEY = os.environ.get("SUGGEST_KEY", "").strip()
+
+# macOS 알림 앱용 키 — /ws/app 과 /api/suggestions/apply 에만 통한다 (비우면 앱은 접속 불가)
+APP_KEY = os.environ.get("APP_KEY", "").strip()
 
 MIN_SECRET_LENGTH = 24
 
@@ -286,14 +298,15 @@ def _validate_auth_config() -> None:
     is_local_http = base.scheme == "http" and base.hostname in ("localhost", "127.0.0.1")
     if not (base.scheme == "https" and base.hostname) and not is_local_http:
         raise RuntimeError("PUBLIC_BASE_URL 은 https:// 로 시작하는 전체 주소여야 합니다.")
-    for name, value in (("API_KEY", API_KEY), ("DEVICE_TOKEN", DEVICE_TOKEN), ("SUGGEST_KEY", SUGGEST_KEY)):
+    for name, value in (("API_KEY", API_KEY), ("DEVICE_TOKEN", DEVICE_TOKEN), ("SUGGEST_KEY", SUGGEST_KEY),
+                        ("APP_KEY", APP_KEY)):
         if value and len(value) < MIN_SECRET_LENGTH:
             raise RuntimeError(f"{name} 은 {MIN_SECRET_LENGTH}자 이상이어야 합니다.")
 
     # 비밀 값은 생성 명령의 "결과"여야 한다. 공백·따옴표·$( 가 들어 있으면 명령 문자열을
     # 그대로 붙여 넣은 것이므로(공개된 값), 그 상태로 서버가 뜨지 않게 한다.
     secrets_in_use = {"SESSION_SECRET": SESSION_SECRET, "API_KEY": API_KEY, "DEVICE_TOKEN": DEVICE_TOKEN,
-                      "SUGGEST_KEY": SUGGEST_KEY}
+                      "SUGGEST_KEY": SUGGEST_KEY, "APP_KEY": APP_KEY}
     for name, value in secrets_in_use.items():
         if value and not re.fullmatch(r"[A-Za-z0-9._~+/=\-]+", value):
             raise RuntimeError(
@@ -302,7 +315,7 @@ def _validate_auth_config() -> None:
             )
     distinct = [v for v in secrets_in_use.values() if v]
     if len(distinct) != len(set(distinct)):
-        raise RuntimeError("SESSION_SECRET / API_KEY / DEVICE_TOKEN / SUGGEST_KEY 는 서로 다른 값이어야 합니다.")
+        raise RuntimeError("SESSION_SECRET / API_KEY / DEVICE_TOKEN / SUGGEST_KEY / APP_KEY 는 서로 다른 값이어야 합니다.")
 
 
 _validate_auth_config()
@@ -317,8 +330,10 @@ ICON_FILES = {
 PUBLIC_PATHS = frozenset({"/", "/healthz", "/login", "/auth/callback", "/logout", *ICON_FILES})
 # API 키로도 접근 가능한 경로 (그 외 경로는 Google 로그인 세션만 통한다)
 API_KEY_PATHS = frozenset({"/api/shortcuts/names", "/api/shortcuts/activate"})
-# SUGGEST_KEY 로도 접근 가능한 경로 (Power Automate 의 HTTP 동작 — Teams 카드 [바꾸기])
-SUGGEST_KEY_PATHS = frozenset({"/api/suggestions/accept"})
+# SUGGEST_KEY 로도 접근 가능한 경로 (Power Automate 의 HTTP 동작 — 앱으로 제안 보내기, Teams 카드 [바꾸기])
+SUGGEST_KEY_PATHS = frozenset({"/api/suggestions/notify", "/api/suggestions/accept"})
+# APP_KEY 로도 접근 가능한 경로 (macOS 알림 앱의 적용 요청). 앱의 WebSocket(/ws/app)은 핸들러가 직접 검사한다
+APP_KEY_PATHS = frozenset({"/api/suggestions/apply"})
 
 oauth = OAuth()
 if not AUTH_DISABLED:
@@ -395,6 +410,10 @@ _persist_task: Optional[asyncio.Task] = None
 # {"revert_to": 바꾸기 직전 프리셋 id, "expected": 제안으로 적용한 id, "at": aware UTC datetime}
 pending_revert: Optional[dict] = None
 _revert_task: Optional[asyncio.Task] = None
+
+# macOS 알림 앱에 보낸 제안 — 앱이 다시 접속하면 아직 유효한 것을 다시 보낸다 (메모리만, 오래된 것부터)
+# 일정 제목이 들어 있으므로 state.json·로그에 남기지 않는다
+pending_suggestions: list[dict] = []
 
 
 def _now_iso() -> str:
@@ -711,7 +730,8 @@ class ConnectionManager:
         for conn in failed:
             await self.disconnect(conn)
             try:
-                await conn.close(code=1011)
+                # 읽지 않는 연결은 close 도 쓰기 버퍼가 빌 때까지 기다리므로 시간 제한을 둔다
+                await asyncio.wait_for(conn.close(code=1011), timeout=WS_SEND_TIMEOUT)
             except Exception:
                 pass
         if failed:
@@ -1128,6 +1148,8 @@ async def lifespan(app: FastAPI):
             logger.warning("API_KEY 미설정 — Apple 단축어 경로는 로그인 세션으로만 접근 가능합니다.")
         if not DEVICE_TOKEN:
             logger.warning("DEVICE_TOKEN 미설정 — 어떤 디바이스도 /ws 에 접속할 수 없습니다.")
+        if not APP_KEY:
+            logger.info("APP_KEY 미설정 — macOS 알림 앱은 /ws/app 에 접속할 수 없습니다.")
     # 데이터 파일에 문제가 있어도 서버는 떠야 한다 (원인을 로그로 남기고 계속)
     # (프리셋과 상태는 따로 처리한다 — 프리셋 쪽 오류가 세션 세대 복원을 막지 않도록)
     try:
@@ -1193,7 +1215,8 @@ def _session_email(request: Request) -> Optional[str]:
     return email
 
 
-def _api_key_from(request: Request) -> str:
+def _api_key_from(request) -> str:
+    """X-API-Key, 없으면 Authorization: Bearer. HTTP 요청과 WebSocket 핸드셰이크 모두 받는다."""
     key = request.headers.get("x-api-key", "")
     if not key:
         authorization = request.headers.get("authorization", "")
@@ -1206,6 +1229,12 @@ def _device_authorized(websocket: WebSocket) -> bool:
     if AUTH_DISABLED:
         return True
     return _secret_matches(websocket.headers.get("x-device-token", ""), DEVICE_TOKEN)
+
+
+def _app_authorized(websocket: WebSocket) -> bool:
+    if AUTH_DISABLED:
+        return True
+    return _secret_matches(_api_key_from(websocket), APP_KEY)
 
 
 def _message_page(title: str, message: str, status_code: int, link_label: str = "로그인 페이지로") -> HTMLResponse:
@@ -1245,9 +1274,9 @@ async def auth_gate(request: Request, call_next):
     모든 HTTP 요청의 관문. 라우트 핸들러(와 multipart 본문 파싱)보다 먼저 실행된다.
 
     1. 인증 — PUBLIC_PATHS 가 아니면 허용된 Google 세션이 있어야 한다.
-       API_KEY_PATHS 는 API_KEY, SUGGEST_KEY_PATHS 는 SUGGEST_KEY 로도 통과한다 (X-API-Key 또는 Bearer —
+       API_KEY_PATHS 는 API_KEY, SUGGEST_KEY_PATHS 는 SUGGEST_KEY, APP_KEY_PATHS 는 APP_KEY 로도 통과한다 (X-API-Key 또는 Bearer —
        키마다 자기 경로에만 통한다). 새 HTTP 라우트는 기본적으로 보호된다.
-       (WebSocket 은 이 미들웨어를 거치지 않는다 — WS 라우트는 각자 인증해야 한다. /ws 참고)
+       (WebSocket 은 이 미들웨어를 거치지 않는다 — WS 라우트는 각자 인증해야 한다. /ws, /ws/app 참고)
     2. 본문 크기 — FastAPI/Starlette 는 엔드포인트 실행 전에 본문 전체를 받으므로(JSON 은 메모리,
        multipart 는 임시 파일), 한도를 넘는 Content-Length 는 여기서 413, chunked 는 411 로 끊는다.
     """
@@ -1261,6 +1290,7 @@ async def auth_gate(request: Request, call_next):
             _session_email(request) is not None
             or (path in API_KEY_PATHS and _secret_matches(key, API_KEY))
             or (path in SUGGEST_KEY_PATHS and _secret_matches(key, SUGGEST_KEY))
+            or (path in APP_KEY_PATHS and _secret_matches(key, APP_KEY))
         )
         if not authorized:
             if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
@@ -1571,6 +1601,97 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         await manager.disconnect(websocket)
         schedule_persist()
+
+
+class AppConnections:
+    """macOS 알림 앱의 WebSocket 연결. 디바이스(ConnectionManager)와 따로 두어 서로의 메시지를 받지 않게 한다."""
+
+    def __init__(self):
+        self.connections: set[WebSocket] = set()
+        self._lock = asyncio.Lock()
+
+    async def connect(self, websocket: WebSocket) -> bool:
+        """수락하고 목록에 넣는다. 이미 MAX_APP_CONNECTIONS 개면 수락하지 않고 False."""
+        async with self._lock:
+            if len(self.connections) >= MAX_APP_CONNECTIONS:
+                return False
+            await websocket.accept()
+            self.connections.add(websocket)
+        return True
+
+    async def disconnect(self, websocket: WebSocket) -> None:
+        async with self._lock:
+            self.connections.discard(websocket)
+
+    async def broadcast_text(self, text: str) -> int:
+        """모든 앱에 보낸다. 실패·타임아웃된 연결은 닫는다(앱이 다시 접속한다). @return 받은 앱 수"""
+        async with self._lock:
+            connections = list(self.connections)
+        results = await asyncio.gather(
+            *(asyncio.wait_for(conn.send_text(text), timeout=WS_SEND_TIMEOUT) for conn in connections),
+            return_exceptions=True,
+        )
+        delivered = 0
+        for conn, result in zip(connections, results):
+            if not isinstance(result, BaseException):
+                delivered += 1
+                continue
+            logger.warning(f"❌ 앱 전송 실패 ({conn.client}): {result!r}")
+            await self.disconnect(conn)
+            try:
+                # 읽지 않는 연결은 close 도 쓰기 버퍼가 빌 때까지 기다리므로 시간 제한을 둔다
+                await asyncio.wait_for(conn.close(code=1011), timeout=WS_SEND_TIMEOUT)
+            except Exception:
+                pass
+        return delivered
+
+
+app_connections = AppConnections()
+
+
+def _live_suggestions() -> list[dict]:
+    """만료된 제안을 버리고 남은 것을 돌려준다 (오래된 것부터)."""
+    now = datetime.now(timezone.utc)
+    pending_suggestions[:] = [s for s in pending_suggestions if s["_expires"] > now]
+    return pending_suggestions
+
+
+def _suggestion_message(suggestion: dict) -> str:
+    return json.dumps({k: v for k, v in suggestion.items() if not k.startswith("_")}, ensure_ascii=False)
+
+
+@app.websocket("/ws/app")
+async def app_websocket(websocket: WebSocket):
+    """
+    macOS 알림 앱이 붙어 있는 WebSocket. 서버 → 앱 한 방향이다.
+      0. APP_KEY(X-API-Key 또는 Bearer) 검증 — 틀리면 accept 전에 close(핸드셰이크 HTTP 403)
+      1. {"type":"hello"} 다음, 아직 유효한 제안을 모두 다시 보낸다 (앱이 id 로 중복을 거른다)
+      2. 이후 /api/suggestions/notify 가 제안을 보낸다. 앱이 보내는 메시지는 읽고 버린다
+    """
+    if not _app_authorized(websocket):
+        logger.warning(f"🚫 앱 키가 없는/틀린 WebSocket 접속 거부: {websocket.client}")
+        await websocket.close(code=1008)
+        return
+    if not await app_connections.connect(websocket):
+        logger.warning(f"🚫 앱 연결 한도({MAX_APP_CONNECTIONS}) 초과 — 접속 거부: {websocket.client}")
+        await websocket.close(code=1013)
+        return
+    logger.info(f"🖥️  알림 앱 연결: {websocket.client}  (현재 {len(app_connections.connections)}개)")
+    try:
+        await websocket.send_text('{"type":"hello"}')
+        for suggestion in list(_live_suggestions()):
+            await websocket.send_text(_suggestion_message(suggestion))
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"❌ 알림 앱 비정상 종료 ({websocket.client}): {e!r}")
+    finally:
+        await app_connections.disconnect(websocket)
+        logger.info(f"🖥️  알림 앱 연결 해제: {websocket.client}")
 
 
 # ──────────────────────────────────────────────
@@ -2020,12 +2141,13 @@ async def _apply_suggestion(preset: dict, until_raw: Optional[str]) -> tuple[dic
 
 @app.post("/api/suggestions/apply")
 async def apply_suggestion(req: SuggestionApplyRequest):
-    """제안 화면의 [바꾸기]. 규칙은 _apply_suggestion 참고."""
+    """제안 화면·macOS 알림 앱의 [바꾸기]. 규칙은 _apply_suggestion 참고. message 는 결과 한 줄 문장."""
     preset = await asyncio.to_thread(get_preset, req.preset_id)
     if not preset:
         raise HTTPException(404, "프리셋을 찾을 수 없습니다.")
-    result, _, _ = await _apply_suggestion(preset, req.until)
-    return {**result, "revert": await asyncio.to_thread(_revert_info)}
+    result, previous, old = await _apply_suggestion(preset, req.until)
+    message = await _suggestion_summary(preset, result, previous, old)
+    return {**result, "revert": await asyncio.to_thread(_revert_info), "message": message}
 
 
 class SuggestionAcceptRequest(BaseModel):
@@ -2044,6 +2166,30 @@ def _ro(word: str) -> str:
     if not 0 <= code <= 11171:
         return "(으)로"
     return "로" if code % 28 in (0, 8) else "으로"
+
+
+async def _suggestion_summary(preset: dict, result: dict, previous: Optional[str], old: Optional[dict]) -> str:
+    """제안을 적용한 결과를 한 줄 문장으로 (Teams 메시지·앱 알림에 그대로 쓴다). 인자는 _apply_suggestion 의 반환값."""
+    entry = pending_revert
+    back = ""
+    if entry is not None and entry["expected"] == preset["id"]:
+        # 복귀 대상이 없으면 _run_revert 가 화면을 그대로 두므로 돌아간다고 말하지 않는다
+        target = await asyncio.to_thread(get_preset, entry["revert_to"])
+        if target is not None:
+            at = entry["at"].astimezone(SUMMARY_TZ)
+            day = "내일 " if at.date() > datetime.now(SUMMARY_TZ).date() else ""   # 예약은 24시간 안이다
+            back = f" {day}{at:%H:%M}에 '{target['name']}'{_ro(target['name'])} 돌아갑니다."
+
+    shown = preset["name"]
+    if previous != preset["id"]:
+        text = f"'{shown}'{_ro(shown)} 바꿨습니다.{back}"
+    elif back and (old is None or old["at"] != entry["at"]):
+        text = f"'{shown}' 상태를 유지합니다.{back}"
+    else:
+        text = f"이미 '{shown}' 상태입니다.{back}"
+    if result.get("deferred"):
+        text += " 잠시 후 화면에 반영됩니다."
+    return text
 
 
 @app.post("/api/suggestions/accept")
@@ -2066,27 +2212,86 @@ async def accept_suggestion(req: SuggestionAcceptRequest):
         if e.status_code == 404:        # 이미지 파일이 없거나 적용하는 사이 삭제됐다
             return PlainTextResponse(f"'{name}' 프리셋을 불러오지 못해 바꾸지 않았습니다. Admin 에서 확인하세요.")
         raise
+    return PlainTextResponse(await _suggestion_summary(preset, result, previous, old))
 
-    entry = pending_revert
-    back = ""
-    if entry is not None and entry["expected"] == preset["id"]:
-        # 복귀 대상이 없으면 _run_revert 가 화면을 그대로 두므로 돌아간다고 말하지 않는다
-        target = await asyncio.to_thread(get_preset, entry["revert_to"])
-        if target is not None:
-            at = entry["at"].astimezone(SUMMARY_TZ)
-            day = "내일 " if at.date() > datetime.now(SUMMARY_TZ).date() else ""   # 예약은 24시간 안이다
-            back = f" {day}{at:%H:%M}에 '{target['name']}'{_ro(target['name'])} 돌아갑니다."
 
-    shown = preset["name"]
-    if previous != preset["id"]:
-        text = f"'{shown}'{_ro(shown)} 바꿨습니다.{back}"
-    elif back and (old is None or old["at"] != entry["at"]):
-        text = f"'{shown}' 상태를 유지합니다.{back}"
-    else:
-        text = f"이미 '{shown}' 상태입니다.{back}"
-    if result.get("deferred"):
-        text += " 잠시 후 화면에 반영됩니다."
-    return PlainTextResponse(text)
+class SuggestionNotifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=MAX_PRESET_NAME_LENGTH)
+    subject: Optional[str] = Field(default=None, max_length=MAX_SUBJECT_INPUT)
+    start: Optional[str] = Field(default=None, max_length=MAX_UNTIL_LENGTH)
+    until: Optional[str] = Field(default=None, max_length=MAX_UNTIL_LENGTH)
+
+
+# 제목에서 지우는 문자: 제어(Cc)·서로게이트(Cs)·사용자 정의(Co)·서식(Cf, 방향 바꾸기 등).
+# 미할당(Cn)은 남긴다 — 3.10 의 unicodedata(Unicode 13)는 새 이모지를 Cn 으로 본다.
+# 이모지를 잇는 ZWJ(U+200D)와 이모지 표시 선택자(U+FE0F)도 남긴다.
+_SUBJECT_DROP = frozenset({"Cc", "Cs", "Co", "Cf"})
+_SUBJECT_KEEP = frozenset("\t\n\r\u200d\ufe0f")
+
+
+def clean_subject(raw: Optional[str]) -> str:
+    """일정 제목을 알림에 보일 한 줄로. 제어·서식 문자는 지우고 공백은 하나로, 길면 자른다."""
+    text = "".join(ch for ch in (raw or "")
+                   if ch in _SUBJECT_KEEP or unicodedata.category(ch) not in _SUBJECT_DROP)
+    text = " ".join(text.split())
+    return text if len(text) <= MAX_SUBJECT_SHOWN else text[:MAX_SUBJECT_SHOWN] + "…"
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, exc: RequestValidationError):
+    """FastAPI 기본 422 는 입력값을 그대로 돌려준다. notify 는 일정 제목이 들어 있으므로 위치·이유만 돌려준다."""
+    if request.scope["path"] == "/api/suggestions/notify":
+        errors = [{k: v for k, v in error.items() if k not in ("input", "ctx", "url")} for error in exc.errors()]
+        return JSONResponse(status_code=422, content={"detail": errors})
+    return await request_validation_exception_handler(request, exc)
+
+
+@app.post("/api/suggestions/notify")
+async def notify_suggestion(req: SuggestionNotifyRequest):
+    """
+    Power Automate 가 일정 시작 전에 부른다(SUGGEST_KEY). 연결된 macOS 알림 앱에 제안을 보낸다.
+    화면은 바꾸지 않는다 — 앱에서 고르면 앱이 /api/suggestions/apply 를 부른다.
+    앱이 꺼져 있으면 만료 전까지 들고 있다가 앱이 접속할 때 보낸다.
+    일정 제목은 메모리에만 두고 로그·state.json 에는 남기지 않는다.
+    """
+    name = req.name.strip()
+    presets = await asyncio.to_thread(load_presets)
+    preset = next((p for p in presets if p["name"].strip() == name), None)
+    if not preset:
+        raise HTTPException(404, f"'{name}' 프리셋이 없습니다.")
+
+    now = datetime.now(timezone.utc)
+    start = parse_until(req.start) if req.start else None
+    until = parse_until(req.until) if req.until else None
+    if (req.start and start is None) or (req.until and until is None):
+        raise HTTPException(422, "start·until 은 ISO 8601 시각이어야 합니다.")
+    if until is not None and until <= now:
+        raise HTTPException(409, "이미 끝난 일정입니다.")
+
+    subject = clean_subject(req.subject)
+    head = f"{start.astimezone(SUMMARY_TZ):%H:%M}" if start else ""
+    title = " ".join(part for part in (head, subject) if part) or "일정 제안"
+    suggestion = {
+        "type": "suggestion",
+        "id": secrets.token_hex(8),
+        "title": title,
+        "body": f"'{preset['name']}'{_ro(preset['name'])} 바꿀까요?",
+        "preset_id": preset["id"],
+        "preset_name": preset["name"],
+        "until": until.isoformat(timespec="seconds") if until else None,
+        "_expires": until or now + timedelta(seconds=SUGGESTION_DEFAULT_TTL),
+        "presets": [{"id": p["id"], "name": p["name"]} for p in presets],
+    }
+    suggestion["expires_at"] = suggestion["_expires"].isoformat(timespec="seconds")
+    live = _live_suggestions()
+    live.append(suggestion)
+    del live[:-MAX_PENDING_SUGGESTIONS]
+
+    delivered = await app_connections.broadcast_text(_suggestion_message(suggestion))
+    logger.info(f"📨 제안 전달: '{preset['name']}' → 앱 {delivered}개 (id={suggestion['id']})")
+    return {"id": suggestion["id"], "delivered": delivered}
 
 
 @app.delete("/api/suggestions/revert")

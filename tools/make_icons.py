@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-파비콘 생성기 — server/static/ 의 favicon.svg, favicon.ico, apple-touch-icon.png 를 한 번에 만든다.
+아이콘 생성기 — server/static/ 의 favicon.svg, favicon.ico, apple-touch-icon.png 와
+macOS 알림 앱의 AppIcon.png(1024px) 를 한 번에 만든다.
 
     python3 tools/make_icons.py      # Pillow 필요 (server/requirements.txt 에 포함)
 
@@ -11,7 +12,9 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-STATIC_DIR = Path(__file__).resolve().parent.parent / "server" / "static"
+ROOT = Path(__file__).resolve().parent.parent
+STATIC_DIR = ROOT / "server" / "static"
+MACOS_ICON = ROOT / "macos" / "StatusBoardNotifier" / "Resources" / "AppIcon.png"
 
 BRAND = "#5e6ad2"   # Admin 테마의 --primary
 PAPER = "#f7f8f8"   # --ink
@@ -69,6 +72,12 @@ def main() -> None:
 
     for name in ("favicon.svg", "favicon.ico", "apple-touch-icon.png"):
         print(f"{name}: {(STATIC_DIR / name).stat().st_size} bytes")
+
+    # macOS 앱 아이콘 격자: 1024 캔버스 안 824px 본체 (가장자리 100px 여백). .icns 는 build-app.sh 가 만든다
+    canvas = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+    canvas.alpha_composite(raster(824), (100, 100))
+    canvas.save(MACOS_ICON, optimize=True)
+    print(f"{MACOS_ICON.relative_to(ROOT)}: {MACOS_ICON.stat().st_size} bytes")
 
 
 if __name__ == "__main__":

@@ -62,3 +62,7 @@ Network Trash Folder
 Temporary Items
 .apdisk
 .omc/
+
+# macOS 알림 앱 (SwiftPM)
+.build/
+.swiftpm/
